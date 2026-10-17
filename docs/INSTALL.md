@@ -1,0 +1,89 @@
+# 설치 가이드
+
+## 준비물
+
+| 항목 | 설명 |
+|---|---|
+| PC | Windows 10/11 (권장), macOS, Linux. 장중에 켜 두어야 함 |
+| 키움증권 계좌 | 본인 명의. 모의투자로 시작하려면 키움 모의투자 신청 |
+| 키움 REST API 앱키 | 키움 OpenAPI 사이트에서 본인 계좌로 발급 (앱키·시크릿키). 모의투자용 키를 따로 받는 경우가 있으니 사이트 안내를 따르세요 |
+
+키는 본인만 씁니다. 다른 사람에게 주거나 저장소에 올리지 마세요.
+
+## 1. 설치
+
+**Windows** — PowerShell에서 한 줄:
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/Re-qwer3618/ktrade-public/main/scripts/install.ps1 | iex"
+```
+
+또는 [릴리스 페이지](https://github.com/Re-qwer3618/ktrade-public/releases/latest)에서 `install.ps1`을 받아:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install.ps1             # 최신 릴리스
+powershell -ExecutionPolicy Bypass -File install.ps1 -Dashboard  # 대시보드까지
+powershell -ExecutionPolicy Bypass -File install.ps1 -Source .\ktrade-<버전>-py3-none-any.whl   # 받은 wheel 파일로
+```
+
+**macOS / Linux**:
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/Re-qwer3618/ktrade-public/main/scripts/install.sh | sh
+DASHBOARD=1 sh install.sh      # 받은 install.sh로, 대시보드까지
+```
+
+스크립트가 하는 일: [uv](https://docs.astral.sh/uv/) 설치(없을 때) → ktrade 설치(자체 파이썬 3.12 환경, 시스템 파이썬을 건드리지 않음)
+→ `ktrade init` → `ktrade doctor --offline`. 관리자 권한은 필요 없습니다.
+
+직접 설치: [uv](https://docs.astral.sh/uv/) 설치 후 `uv tool install --python 3.12 <릴리스의 .whl 주소 또는 파일>` → `ktrade init`.
+개발 중인 최신 코드는 `uv tool install --python 3.12 "git+https://github.com/Re-qwer3618/ktrade-public"` (git 필요).
+
+## 2. 키 넣기
+
+`~/.ktrade/.env` (Windows: `C:\Users\<이름>\.ktrade\.env`):
+
+```
+KIWOOM_APP_KEY=발급받은 앱키
+KIWOOM_APP_SECRET=발급받은 시크릿키
+```
+
+```bash
+ktrade doctor          # ✔ 키움 API 연결 이 나오면 성공 (조회만 하고 주문은 안 함)
+```
+
+## 3. 데이터 받기 (범위는 직접 정함)
+
+`~/.ktrade/config.yaml`의 `collect`에 받을 종목(`symbols`, 비우면 `market_names` 시장 전체)·기간(`start`·`end`, 또는 `years`)을 적습니다.
+
+```bash
+ktrade collect --dry-run                              # 받을 범위만 확인
+ktrade collect --symbols 005930,000660 --years 5      # 몇 종목만 먼저 (몇 초)
+ktrade collect --limit 100                            # 시장 전체 중 100종목 (몇 분)
+ktrade collect                                        # config대로 (전 종목이면 처음엔 몇 시간, 이후엔 이어받기라 몇 분)
+ktrade data                                           # 받아 둔 범위
+```
+
+## 4. 연습 → 모의투자
+
+1. `config.yaml`의 기본은 `broker: paper` — 실제 주문 없이 가상 체결로 돌아갑니다(시세는 키움에서 받음).
+2. 내 매매조건을 만들어(`ktrade new <조건>`) 실험하고(`ktrade test <조건>`), `strategies.enabled`에 켜서 paper로 며칠 돌려 봅니다(`ktrade run`).
+3. 키움 모의투자 계좌로: `broker: kiwoom`, `kiwoom.is_mock: true`.
+4. 실전(`is_mock: false`)은 충분한 검증 뒤 본인 판단으로만. `ktrade run --live-confirm` 없이는 시작하지 않습니다.
+
+## 5. 자동 실행
+
+```bash
+ktrade schedule install --dry-run   # 등록될 내용 미리 보기
+ktrade schedule install             # Windows: 작업 스케줄러 ktrade-daily(평일 16:30)·ktrade-run(평일 08:50)
+```
+
+PC가 로그온해 있어야 실행됩니다. 절전 모드에 들어가지 않게 전원 설정을 확인하세요. 운영은 [OPERATIONS.md](OPERATIONS.md).
+
+## 업데이트·삭제
+
+```bash
+uv tool upgrade ktrade          # 업데이트 (설정·데이터·내 전략은 ~/.ktrade에 그대로)
+ktrade schedule remove          # 자동 실행 해제
+uv tool uninstall ktrade        # 프로그램 삭제 (~/.ktrade는 직접 지우기 전까지 남음)
+```

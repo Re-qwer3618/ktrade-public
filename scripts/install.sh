@@ -1,0 +1,40 @@
+#!/usr/bin/env sh
+# ktrade 설치 (macOS / Linux)
+#
+#   sh install.sh                                  # 최신 릴리스
+#   sh install.sh ./ktrade-<버전>-py3-none-any.whl  # 받은 wheel 파일로
+#   sh install.sh git+https://github.com/Re-qwer3618/ktrade-public   # 개발 중인 최신 코드 (git 필요)
+#   DASHBOARD=1 sh install.sh                      # 대시보드까지
+#
+# uv(파이썬 도구 관리자)가 없으면 공식 설치 스크립트로 설치 → ktrade 설치(자체 파이썬 3.12) → ktrade init → doctor.
+set -e
+REPO="Re-qwer3618/ktrade-public"
+SRC="${1:-}"
+if ! command -v uv >/dev/null 2>&1; then
+  echo "uv가 없어 설치합니다 (https://astral.sh/uv)..."
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+fi
+if [ -z "$SRC" ]; then
+  echo "최신 릴리스 확인: https://github.com/$REPO/releases"
+  SRC=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep -o '"browser_download_url": *"[^"]*\.whl"' | head -n 1 | sed 's/.*"\(http[^"]*\)"/\1/')
+  [ -n "$SRC" ] || { echo "최신 릴리스에서 wheel 파일을 찾지 못했습니다"; exit 1; }
+fi
+PKG="$SRC"
+if [ -n "$DASHBOARD" ]; then
+  case "$SRC" in git+*|http*) PKG="ktrade[dashboard] @ $SRC" ;; *) PKG="$SRC[dashboard]" ;; esac
+fi
+echo "ktrade 설치: $PKG"
+uv tool install --python 3.12 --force "$PKG"
+export PATH="$HOME/.local/bin:$PATH"
+ktrade init
+ktrade doctor --offline || true
+cat <<'EOT'
+
+다음 단계
+  1. 키움 앱키를 ~/.ktrade/.env 에 적기 (KIWOOM_APP_KEY, KIWOOM_APP_SECRET)
+  2. ktrade doctor                     (키움 연결 확인, 조회만)
+  3. config.yaml 의 collect 에 받을 종목·기간 → ktrade collect --dry-run → ktrade collect
+  4. ktrade new my_condition → strategy.py 작성 → ktrade test my_condition
+  5. ktrade docs                       (작성 가이드·AI용 규격)
+EOT

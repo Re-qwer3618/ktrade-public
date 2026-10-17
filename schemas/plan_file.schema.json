@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ktrade plan file (schema 1)",
+  "type": "object",
+  "required": ["schema", "asof", "strategy", "version", "plans"],
+  "properties": {
+    "schema": {"const": 1},
+    "asof": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+    "strategy": {"type": "string", "minLength": 1},
+    "version": {"type": "string", "minLength": 1},
+    "status": {"type": "string"},
+    "generated_at": {"type": "string"},
+    "skipped": {"type": "object"},
+    "plans": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["symbol", "entry", "stop", "target"],
+        "properties": {
+          "plan_id": {"type": "string"},
+          "symbol": {"type": "string", "pattern": "^[0-9A-Z]{6}$"},
+          "name": {"type": "string"},
+          "market": {"type": "string"},
+          "entry": {
+            "type": "object",
+            "required": ["min_open", "min_price", "max_price"],
+            "properties": {
+              "min_open": {"type": "number", "exclusiveMinimum": 0},
+              "min_price": {"type": "number", "exclusiveMinimum": 0},
+              "max_price": {"type": "number", "exclusiveMinimum": 0},
+              "after": {"type": "string", "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"}
+            }
+          },
+          "stop": {"type": "number", "exclusiveMinimum": 0},
+          "target": {"type": "number", "exclusiveMinimum": 0},
+          "max_hold_days": {"type": "integer", "minimum": 1, "maximum": 120},
+          "rank": {"type": ["integer", "null"]},
+          "basis": {"type": "string"},
+          "meta": {"type": "object"}
+        }
+      }
+    }
+  }
+}

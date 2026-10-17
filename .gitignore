@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+# 사용자 데이터·키는 저장소 밖(~/.ktrade)에 두지만, 혹시 여기 만들어도 올리지 않는다
+.env
+*.db
+*.log
+/data/
+/plans/
+/backtests/

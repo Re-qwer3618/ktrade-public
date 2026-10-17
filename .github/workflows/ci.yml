@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python: ["3.11", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: test
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          uv sync --extra dev --python ${{ matrix.python }}
+          uv run pytest -q
+      - name: build wheel and smoke-test install
+        shell: bash
+        run: |
+          uv build
+          uv venv /tmp/wt --python ${{ matrix.python }}
+          uv pip install --python /tmp/wt dist/*.whl
+          export KTRADE_HOME=/tmp/kt_home PYTHONIOENCODING=utf-8
+          if [ -f /tmp/wt/Scripts/ktrade.exe ]; then K=/tmp/wt/Scripts/ktrade.exe; else K=/tmp/wt/bin/ktrade; fi
+          $K init
+          $K strategies
+          $K doctor --offline || true

@@ -1,0 +1,46 @@
+[project]
+name = "ktrade"
+version = "0.4.1"
+description = "나만의 매매조건을 실험하는 국내주식 엔진 — 키움 REST API 기반, 백테스트·모의투자 (키움증권과 무관한 개인 프로젝트)"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Re-qwer3618" }]
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.26",
+    "pyyaml>=6.0",
+    "kiwoom-client>=0.4",
+    "python-dotenv>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Re-qwer3618/ktrade-public"
+Issues = "https://github.com/Re-qwer3618/ktrade-public/issues"
+
+[project.optional-dependencies]
+dashboard = ["streamlit>=1.40", "plotly>=5"]
+dev = ["pytest>=8", "streamlit>=1.40", "plotly>=5"]
+
+[project.scripts]
+ktrade = "ktrade.cli:main"
+
+# 전략을 pip 패키지로 배포하는 경우: 그 패키지의 pyproject.toml에
+#   [project.entry-points."ktrade.strategies"]
+#   my_strategy = "my_pkg.strategy:MyStrategy"
+# 를 적으면 설치만으로 ktrade가 찾는다 (docs/CONDITION_GUIDE.md).
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ktrade"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"strategies" = "ktrade/_bundled_strategies"
+"docs" = "ktrade/_docs"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

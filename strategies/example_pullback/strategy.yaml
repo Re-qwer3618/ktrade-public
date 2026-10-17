@@ -1,0 +1,18 @@
+id: example_pullback
+version: v1
+kind: condition
+entry: strategy.py:Pullback
+description: 예제 매매조건 — 상승 추세(60일선 위) 종목이 20일선 근처로 눌리면 다음 날 그 가격대에서 매수 (교육용, 수익 보장 없음)
+author: ktrade
+params:
+  min_price: 2000
+  min_avg_value: 500000000
+  near_pct: 2.0             # 종가가 20일선 위 0~2% 안 (눌림)
+  band_pct: 1.5             # 다음 날 매수 구간 = 20일선 ±1.5%
+  max_plans: 5
+# 이 조건만 손절·익절을 다르게 (엔진 공통 exits 덮어쓰기) — 매매조건 코드는 그대로 두고 청산만 바꿔 실험할 수 있다
+exits:
+  stop: {type: atr, value: 2, period: 14}
+  take_profit: {type: r, value: 2}
+  max_hold_days: 15
+  stop_check: close
