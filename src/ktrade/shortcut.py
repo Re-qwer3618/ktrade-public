@@ -33,7 +33,10 @@ def ktrade_exe() -> str:
 
 
 def _ps(script: str) -> str:
-    r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+    """-EncodedCommand(UTF-16) — 명령줄 코드 페이지와 상관없이 한글 경로가 그대로 간다."""
+    import base64
+    enc = base64.b64encode(script.encode("utf-16-le")).decode()
+    r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc],
                        capture_output=True, text=True, encoding="utf-8", errors="replace")
     if r.returncode != 0:
         raise RuntimeError(r.stderr.strip() or r.stdout.strip())
@@ -55,9 +58,7 @@ def _windows_dirs() -> list[Path]:
 def _windows_items(exe: str) -> list[dict]:
     h = home()
     bin_dir = str(Path(exe).parent)
-    console = (f"$env:Path = {_q(bin_dir)} + ';' + $env:Path; Set-Location {_q(h)}; "
-               "& ktrade doctor --offline; Write-Host ''; "
-               "Write-Host 'ktrade 명령을 입력하세요. 전체 목록: ktrade --help' -ForegroundColor Green")
+    console = f"$env:Path = {_q(bin_dir)} + ';' + $env:Path; Set-Location {_q(h)}; & ktrade intro"  # 안내 문구는 ktrade intro가
     ps = shutil.which("powershell") or r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
     return [
         {"name": NAMES["dashboard"], "target": exe, "args": "dashboard --open", "icon": exe + ",0",
@@ -83,10 +84,14 @@ def install(dry_run: bool = False) -> str:
                 if dry_run:
                     continue
                 d.mkdir(parents=True, exist_ok=True)
-                _ps(f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut({_q(lnk)}); "
+                # WScript.Shell은 시스템 코드 페이지 밖 글자(영문 Windows의 한글 등)가 든 파일 이름으로 저장하지 못한다(CI 실측) →
+                # 영문 임시 이름으로 저장한 뒤 바꾼다
+                tmp = d / f"_ktrade_{os.getpid()}.lnk"
+                _ps(f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut({_q(tmp)}); "
                     f"$s.TargetPath = {_q(it['target'])}; $s.Arguments = {_q(it['args'])}; "
                     f"$s.WorkingDirectory = {_q(h)}; $s.Description = {_q(it['desc'])}; "
                     + (f"$s.IconLocation = {_q(it['icon'])}; " if it["icon"] else "") + "$s.Save()")
+                os.replace(tmp, lnk)
         return ("만들 바로가기 (--dry-run):\n" if dry_run else "바로가기를 만들었습니다:\n") + "\n".join("  " + x for x in lines)
     if sys.platform == "darwin":
         d = Path(os.getenv("KTRADE_SHORTCUT_DIR") or Path.home() / "Desktop")

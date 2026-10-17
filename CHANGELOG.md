@@ -1,5 +1,10 @@
 # 변경 기록
 
+## 0.4.3 — 2026-10-17
+
+- 바로가기: 한국어가 아닌 Windows(영문 등)에서 한글 이름 바로가기를 저장하지 못하던 문제 수정(영문 임시 이름으로 저장 후 바꿈), PowerShell 호출을 UTF-16 인코딩으로
+- 'ktrade 명령창' 첫 화면을 ktrade intro로 (점검 + 자주 쓰는 명령)
+
 ## 0.4.2 — 2026-10-17
 
 - 바로가기: `ktrade shortcut install|remove|show` — 'ktrade 대시보드'(더블클릭으로 브라우저에 열림), 'ktrade 명령창', 'ktrade 폴더'

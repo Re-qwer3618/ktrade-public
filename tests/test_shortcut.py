@@ -1,7 +1,7 @@
 """바로가기: 지정 폴더(KTRADE_SHORTCUT_DIR)에 만들고 지운다 — 실제 바탕화면은 건드리지 않음."""
 from __future__ import annotations
 
-import subprocess
+import shutil
 import sys
 
 import pytest
@@ -28,11 +28,11 @@ def test_windows_lnk_roundtrip(sc_dir, home):
     shortcut.install()
     files = sorted(p.name for p in sc_dir.glob("*.lnk"))
     assert files == sorted(f"{n}.lnk" for n in shortcut.NAMES.values())
-    lnk = sc_dir / "ktrade 대시보드.lnk"
-    ps = (f"[Console]::OutputEncoding=[Text.Encoding]::UTF8; $s=(New-Object -ComObject WScript.Shell).CreateShortcut('{lnk}'); "
-          "$s.TargetPath; $s.Arguments; $s.WorkingDirectory")
-    r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, encoding="utf-8")
-    target, args, wd = r.stdout.strip().splitlines()
+    probe = sc_dir.parent / "probe.lnk"   # WScript.Shell은 영문 Windows에서 한글 이름 파일을 못 열어서 영문 이름 사본으로 읽는다
+    shutil.copy(sc_dir / "ktrade 대시보드.lnk", probe)
+    out = shortcut._ps(f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{probe}'); "
+                       "$s.TargetPath; $s.Arguments; $s.WorkingDirectory")
+    target, args, wd = out.splitlines()
     assert target.endswith("ktrade.exe") and args == "dashboard --open" and wd == str(home)
     assert "바로가기 없음" not in shortcut.status()
     shortcut.remove()
@@ -51,3 +51,10 @@ def test_linux_desktop_files(sc_dir):
 def test_cli_shortcut_show(sc_dir, capsys):
     cli.main(["shortcut", "show"])
     assert "바로가기 없음" in capsys.readouterr().out
+
+
+def test_intro_prints_guide(cfg, capsys, monkeypatch):
+    monkeypatch.setattr(cli, "_cfg", lambda: cfg)
+    cli.main(["intro"])
+    out = capsys.readouterr().out
+    assert "ktrade·Python" in out and "ktrade new 이름" in out

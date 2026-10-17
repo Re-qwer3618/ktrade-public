@@ -473,11 +473,11 @@ def cmd_report(a) -> None:
     print(report.text(Store(paths(cfg)["db"], readonly=True), paths(cfg)["plans"]))
 
 
-def cmd_doctor(a) -> None:
+def cmd_doctor(a, exit_on_fail: bool = True) -> None:
     from ktrade.engine import doctor
     rows = doctor.checks(_cfg(), online=not a.offline)
     print(doctor.render(rows))
-    if any(ok is False for _, ok, _ in rows):
+    if exit_on_fail and any(ok is False for _, ok, _ in rows):
         sys.exit(1)
 
 
@@ -540,6 +540,16 @@ def cmd_dashboard(a) -> None:
         code = 0
     if code and a.open:
         stop(f"대시보드가 오류로 끝났습니다 (코드 {code}). 위 메시지를 확인하세요.")
+
+
+def cmd_intro(a) -> None:
+    """'ktrade 명령창' 바로가기가 처음 보여 주는 화면."""
+    cmd_doctor(argparse.Namespace(offline=True), exit_on_fail=False)
+    print(f"\nktrade {__version__} — 명령을 입력하세요. 자주 쓰는 것:")
+    print("  ktrade collect --dry-run   받을 데이터 범위 확인  →  ktrade collect")
+    print("  ktrade new 이름            매매조건 만들기       →  ktrade test 이름 (백테스트)")
+    print("  ktrade data                받아 둔 데이터 범위    ·  ktrade dashboard --open")
+    print("  ktrade --help              전체 목록")
 
 
 def cmd_shortcut(a) -> None:
@@ -612,6 +622,7 @@ def main(argv: list[str] | None = None) -> None:
     add("schedule", cmd_schedule, (("action",), {"choices": ["install", "remove", "show"]}), (("--dry-run",), {"action": "store_true"}))
     add("dashboard", cmd_dashboard, (("--open",), {"action": "store_true", "help": "브라우저로 열기 (바로가기용)"}),
         (("--port",), {"type": int, "default": 8501}))
+    sub.add_parser("intro", help=argparse.SUPPRESS).set_defaults(fn=cmd_intro)
     add("shortcut", cmd_shortcut, (("action",), {"choices": ["install", "remove", "show"]}),
         (("--dry-run",), {"action": "store_true"}))
     a = ap.parse_args(argv)
