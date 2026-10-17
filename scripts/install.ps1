@@ -3,14 +3,17 @@
 #   powershell -ExecutionPolicy Bypass -File install.ps1                      # 최신 릴리스 설치
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Source .\ktrade-<버전>-py3-none-any.whl   # 받은 wheel 파일로
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Source git+https://github.com/Re-qwer3618/ktrade-public   # 개발 중인 최신 코드 (git 필요)
-#   powershell -ExecutionPolicy Bypass -File install.ps1 -Dashboard            # 대시보드까지
+#   powershell -ExecutionPolicy Bypass -File install.ps1 -NoDashboard -NoShortcut   # 대시보드·바로가기 없이 (명령만)
 #
-# 하는 일: uv(파이썬 도구 관리자)가 없으면 공식 설치 스크립트로 설치 → uv로 ktrade 설치(자체 파이썬 3.12 환경, 시스템 파이썬을 건드리지 않음)
-#         → ktrade init(~/.ktrade 설정·키 파일) → ktrade doctor --offline(점검). 관리자 권한·git 필요 없음.
+# 하는 일: uv(파이썬 도구 관리자)가 없으면 공식 설치 스크립트로 설치 → uv로 ktrade 설치(자체 파이썬 3.12 환경, 시스템 파이썬을 건드리지 않음,
+#         대시보드 포함) → ktrade init(~/.ktrade 설정·키 파일) → 바탕화면·시작 메뉴 바로가기(대시보드·명령창·폴더) → ktrade doctor --offline.
+#         관리자 권한·git 필요 없음.
 
 param(
     [string]$Source = "",
-    [switch]$Dashboard,
+    [switch]$Dashboard,       # 예전 옵션 (지금은 기본으로 대시보드 포함)
+    [switch]$NoDashboard,     # 대시보드 구성 요소(streamlit) 없이 가볍게
+    [switch]$NoShortcut,      # 바탕화면·시작 메뉴 바로가기를 만들지 않음
     [switch]$NoShellUpdate    # PATH(사용자 환경변수)를 고치지 않음 — 시험 설치용
 )
 $ErrorActionPreference = "Stop"
@@ -35,7 +38,7 @@ if (-not $Source) {
 }
 
 $pkg = $Source
-if ($Dashboard) {
+if (-not $NoDashboard) {
     if ($Source -like "git+*" -or $Source -like "http*") { $pkg = "ktrade[dashboard] @ $Source" } else { $pkg = "$Source[dashboard]" }
 }
 Write-Host "ktrade 설치: $pkg" -ForegroundColor Cyan
@@ -45,6 +48,10 @@ $bin = if ($env:UV_TOOL_BIN_DIR) { $env:UV_TOOL_BIN_DIR } else { "$env:USERPROFI
 $env:Path = "$bin;$env:Path"
 
 ktrade init
+if (-not $NoShortcut) {
+    Write-Host ""
+    ktrade shortcut install
+}
 Write-Host ""
 ktrade doctor --offline
 Write-Host ""
@@ -54,4 +61,5 @@ Write-Host "  2. ktrade doctor                     (키움 연결 확인, 조회
 Write-Host "  3. config.yaml 의 collect 에 받을 종목·기간 → ktrade collect --dry-run → ktrade collect"
 Write-Host "  4. ktrade new my_condition → strategy.py 작성 → ktrade test my_condition"
 Write-Host "  5. ktrade docs                       (작성 가이드·AI용 규격)"
+if (-not $NoShortcut) { Write-Host "바탕화면의 'ktrade 명령창'을 열면 바로 ktrade 명령을 쓸 수 있고, 'ktrade 대시보드'는 더블클릭으로 열립니다." }
 Write-Host "새 터미널을 열어야 ktrade 명령이 잡힐 수 있습니다."

@@ -21,8 +21,8 @@ powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/Re-
 또는 [릴리스 페이지](https://github.com/Re-qwer3618/ktrade-public/releases/latest)에서 `install.ps1`을 받아:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File install.ps1             # 최신 릴리스
-powershell -ExecutionPolicy Bypass -File install.ps1 -Dashboard  # 대시보드까지
+powershell -ExecutionPolicy Bypass -File install.ps1             # 최신 릴리스 (대시보드·바로가기 포함)
+powershell -ExecutionPolicy Bypass -File install.ps1 -NoDashboard -NoShortcut   # 명령만 가볍게
 powershell -ExecutionPolicy Bypass -File install.ps1 -Source .\ktrade-<버전>-py3-none-any.whl   # 받은 wheel 파일로
 ```
 
@@ -30,11 +30,20 @@ powershell -ExecutionPolicy Bypass -File install.ps1 -Source .\ktrade-<버전>-p
 
 ```bash
 curl -LsSf https://raw.githubusercontent.com/Re-qwer3618/ktrade-public/main/scripts/install.sh | sh
-DASHBOARD=1 sh install.sh      # 받은 install.sh로, 대시보드까지
+NO_DASHBOARD=1 NO_SHORTCUT=1 sh install.sh      # 받은 install.sh로, 명령만 가볍게
 ```
 
 스크립트가 하는 일: [uv](https://docs.astral.sh/uv/) 설치(없을 때) → ktrade 설치(자체 파이썬 3.12 환경, 시스템 파이썬을 건드리지 않음)
-→ `ktrade init` → `ktrade doctor --offline`. 관리자 권한은 필요 없습니다.
+→ `ktrade init` → 바로가기 → `ktrade doctor --offline`. 관리자 권한은 필요 없습니다.
+
+바로가기 (Windows: 바탕화면 + 시작 메뉴 'ktrade' 폴더, macOS: 바탕화면 `.command`, Linux: 앱 메뉴 `.desktop`):
+
+- **ktrade 대시보드**: 더블클릭하면 대시보드를 띄우고 브라우저로 엽니다(`ktrade dashboard --open`). 뜬 창을 닫으면 꺼집니다.
+- **ktrade 명령창**: `ktrade` 명령을 바로 쓸 수 있는 터미널.
+- **ktrade 폴더**: `~/.ktrade` (설정·키·데이터·매매조건).
+
+실행 파일 이름은 `ktrade`(Windows `%USERPROFILE%\.local\bin\ktrade.exe`). 아이콘을 더블클릭하는 프로그램이 아니라 터미널 명령이며,
+설치 직후엔 새 터미널을 열어야 잡힙니다. 바로가기는 `ktrade shortcut install|remove|show`로 다시 만들거나 지웁니다.
 
 직접 설치: [uv](https://docs.astral.sh/uv/) 설치 후 `uv tool install --python 3.12 <릴리스의 .whl 주소 또는 파일>` → `ktrade init`.
 개발 중인 최신 코드는 `uv tool install --python 3.12 "git+https://github.com/Re-qwer3618/ktrade-public"` (git 필요).
@@ -85,5 +94,6 @@ PC가 로그온해 있어야 실행됩니다. 절전 모드에 들어가지 않�
 ```bash
 uv tool upgrade ktrade          # 업데이트 (설정·데이터·내 전략은 ~/.ktrade에 그대로)
 ktrade schedule remove          # 자동 실행 해제
+ktrade shortcut remove          # 바로가기 지우기
 uv tool uninstall ktrade        # 프로그램 삭제 (~/.ktrade는 직접 지우기 전까지 남음)
 ```

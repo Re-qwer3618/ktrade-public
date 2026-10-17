@@ -19,7 +19,9 @@
 
   운영
     ktrade init | daily | plan [--asof] | run [--once] [--live-confirm]
-    ktrade status | report | doctor [--offline] | schedule install|remove|show [--dry-run] | dashboard
+    ktrade status | report | doctor [--offline] | schedule install|remove|show [--dry-run]
+    ktrade dashboard [--open]        보기 전용 대시보드 (이 PC에서만)
+    ktrade shortcut install|remove|show   바탕화면·시작 메뉴 바로가기 (대시보드·명령창·폴더)
 """
 from __future__ import annotations
 
@@ -485,15 +487,68 @@ def cmd_schedule(a) -> None:
           else schedule.status())
 
 
+def _port_open(port: int) -> bool:
+    import socket
+    with socket.socket() as s:
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
 def cmd_dashboard(a) -> None:
     import subprocess
+    import time
+    import webbrowser
+
+    def stop(msg):
+        if a.open:  # 바로가기로 연 창은 오류를 읽을 틈 없이 닫히므로 기다린다
+            print(msg)
+            try:
+                input("\nEnter를 누르면 창을 닫습니다...")
+            except EOFError:
+                pass
+            sys.exit(1)
+        sys.exit(msg)
+
     try:
         import streamlit  # noqa: F401
     except ImportError:
-        sys.exit('대시보드는 선택 설치입니다: uv tool install "ktrade[dashboard]" (또는 pip install "ktrade[dashboard]")')
+        stop('대시보드 구성 요소가 설치되지 않았습니다. 설치 스크립트를 다시 실행하거나:\n'
+             '  uv tool install --python 3.12 --force "ktrade[dashboard] @ <릴리스의 .whl 주소>"')
+    url = f"http://127.0.0.1:{a.port}"
+    if _port_open(a.port):
+        print(f"대시보드가 이미 떠 있습니다: {url}")
+        if a.open:
+            webbrowser.open(url)
+            time.sleep(2)
+        return
     app = Path(__file__).parent / "dashboard" / "app.py"
-    subprocess.run([sys.executable, "-m", "streamlit", "run", str(app), "--server.address", "127.0.0.1",
-                    "--server.headless", "true", "--browser.gatherUsageStats", "false"])
+    proc = subprocess.Popen([sys.executable, "-m", "streamlit", "run", str(app), "--server.address", "127.0.0.1",
+                             "--server.port", str(a.port), "--server.headless", "true",
+                             "--browser.gatherUsageStats", "false"])
+    print(f"ktrade 대시보드: {url}  (이 창을 닫거나 Ctrl+C 하면 꺼집니다)")
+    if a.open:
+        for _ in range(120):
+            if _port_open(a.port) or proc.poll() is not None:
+                break
+            time.sleep(0.5)
+        if proc.poll() is None:
+            webbrowser.open(url)
+    try:
+        code = proc.wait()
+    except KeyboardInterrupt:
+        proc.terminate()
+        code = 0
+    if code and a.open:
+        stop(f"대시보드가 오류로 끝났습니다 (코드 {code}). 위 메시지를 확인하세요.")
+
+
+def cmd_shortcut(a) -> None:
+    from ktrade import shortcut
+    try:
+        print(shortcut.install(a.dry_run) if a.action == "install" else shortcut.remove(a.dry_run)
+              if a.action == "remove" else shortcut.status())
+    except RuntimeError as exc:
+        sys.exit(f"바로가기를 만들지 못했습니다: {exc}")
 
 
 def _fix_console_encoding() -> None:
@@ -555,7 +610,10 @@ def main(argv: list[str] | None = None) -> None:
     add("report", cmd_report)
     add("doctor", cmd_doctor, (("--offline",), {"action": "store_true"}))
     add("schedule", cmd_schedule, (("action",), {"choices": ["install", "remove", "show"]}), (("--dry-run",), {"action": "store_true"}))
-    add("dashboard", cmd_dashboard)
+    add("dashboard", cmd_dashboard, (("--open",), {"action": "store_true", "help": "브라우저로 열기 (바로가기용)"}),
+        (("--port",), {"type": int, "default": 8501}))
+    add("shortcut", cmd_shortcut, (("action",), {"choices": ["install", "remove", "show"]}),
+        (("--dry-run",), {"action": "store_true"}))
     a = ap.parse_args(argv)
     a.fn(a)
 

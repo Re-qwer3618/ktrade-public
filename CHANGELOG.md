@@ -1,5 +1,12 @@
 # 변경 기록
 
+## 0.4.2 — 2026-10-17
+
+- 바로가기: `ktrade shortcut install|remove|show` — 'ktrade 대시보드'(더블클릭으로 브라우저에 열림), 'ktrade 명령창', 'ktrade 폴더'
+  (Windows 바탕화면 + 시작 메뉴, macOS 바탕화면 .command, Linux 앱 메뉴 .desktop). 설치 스크립트가 자동으로 만듦(`-NoShortcut` / `NO_SHORTCUT=1`로 끔)
+- 설치 스크립트가 대시보드를 기본으로 함께 설치(`-NoDashboard` / `NO_DASHBOARD=1`로 가볍게)
+- `ktrade dashboard --open`: 브라우저로 열기, 이미 떠 있으면 그 창만 열기, 오류 시 창이 바로 닫히지 않게 대기. `--port`
+
 ## 0.4.1 — 2026-10-17
 
 - 첫 공개 배포 (https://github.com/Re-qwer3618/ktrade-public), 라이선스 **MIT**

@@ -4,9 +4,10 @@
 #   sh install.sh                                  # 최신 릴리스
 #   sh install.sh ./ktrade-<버전>-py3-none-any.whl  # 받은 wheel 파일로
 #   sh install.sh git+https://github.com/Re-qwer3618/ktrade-public   # 개발 중인 최신 코드 (git 필요)
-#   DASHBOARD=1 sh install.sh                      # 대시보드까지
+#   NO_DASHBOARD=1 NO_SHORTCUT=1 sh install.sh     # 대시보드·바로가기 없이 (명령만)
 #
-# uv(파이썬 도구 관리자)가 없으면 공식 설치 스크립트로 설치 → ktrade 설치(자체 파이썬 3.12) → ktrade init → doctor.
+# uv(파이썬 도구 관리자)가 없으면 공식 설치 스크립트로 설치 → ktrade 설치(자체 파이썬 3.12, 대시보드 포함) → ktrade init
+# → 바로가기(macOS 바탕화면 .command / Linux 앱 메뉴 .desktop) → doctor.
 set -e
 REPO="Re-qwer3618/ktrade-public"
 SRC="${1:-}"
@@ -21,13 +22,14 @@ if [ -z "$SRC" ]; then
   [ -n "$SRC" ] || { echo "최신 릴리스에서 wheel 파일을 찾지 못했습니다"; exit 1; }
 fi
 PKG="$SRC"
-if [ -n "$DASHBOARD" ]; then
+if [ -z "$NO_DASHBOARD" ]; then
   case "$SRC" in git+*|http*) PKG="ktrade[dashboard] @ $SRC" ;; *) PKG="$SRC[dashboard]" ;; esac
 fi
 echo "ktrade 설치: $PKG"
 uv tool install --python 3.12 --force "$PKG"
 export PATH="$HOME/.local/bin:$PATH"
 ktrade init
+[ -n "$NO_SHORTCUT" ] || ktrade shortcut install || true
 ktrade doctor --offline || true
 cat <<'EOT'
 

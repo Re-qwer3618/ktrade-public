@@ -48,6 +48,16 @@ macOS / Linux:
 curl -LsSf https://raw.githubusercontent.com/Re-qwer3618/ktrade-public/main/scripts/install.sh | sh
 ```
 
+설치가 끝나면 바탕화면과 시작 메뉴에 바로가기 3개가 생깁니다.
+
+| 바로가기 | 하는 일 |
+|---|---|
+| **ktrade 대시보드** | 더블클릭 → 대시보드(계획·매매 기록·성적)를 브라우저로 엶. 뜬 창을 닫으면 꺼짐 |
+| **ktrade 명령창** | `ktrade` 명령을 바로 쓸 수 있는 터미널 (점검 결과를 먼저 보여 줌) |
+| **ktrade 폴더** | 설정·키·데이터·내 매매조건 폴더(`~/.ktrade`) |
+
+실행 파일 이름은 `ktrade`입니다(Windows: `%USERPROFILE%\.local\bin\ktrade.exe`). 바로가기를 다시 만들거나 지우려면 `ktrade shortcut install` / `remove`.
+
 `~/.ktrade/.env`에 본인 키움 REST API 앱키(`KIWOOM_APP_KEY`, `KIWOOM_APP_SECRET`)를 적고 `ktrade doctor`로 확인합니다.
 
 ## 1. 데이터 범위 정하고 받기
