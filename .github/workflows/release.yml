@@ -1,0 +1,58 @@
+name: release
+
+# 버전 태그(v0.5.0 등)를 push하면 릴리스를 만든다.
+#   1) pyproject.toml 버전이 태그와 같은지 확인 → 테스트
+#   2) wheel·sdist 빌드 → GitHub 릴리스 생성 (본문 = CHANGELOG.md의 그 버전 항목)
+#      첨부: ktrade-<버전>-py3-none-any.whl, ktrade-<버전>.tar.gz, install.ps1, install.sh
+#   3) installer.yml로 ktrade-setup.exe 빌드해 첨부
+# 사용: pyproject.toml·__init__.py 버전과 CHANGELOG를 올리고 커밋 → git tag v0.5.0 → git push origin v0.5.0
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+
+      - name: check version
+        run: |
+          v=$(grep -m1 '^version' pyproject.toml | cut -d'"' -f2)
+          [ "v$v" = "$TAG" ] || { echo "pyproject.toml 버전 $v 와 태그 $TAG 가 다릅니다"; exit 1; }
+
+      - name: test
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          uv sync --extra dev --python 3.12
+          uv run pytest -q
+
+      - name: build
+        run: uv build
+
+      - name: release notes
+        run: |
+          v="${TAG#v}"
+          awk -v v="$v" '$0 ~ "^## "v" " {f=1; next} /^## / {f=0} f' CHANGELOG.md > notes.md
+          printf '\n---\n**Windows**: `ktrade-setup.exe`를 받아 더블클릭 (몇 분 뒤 첨부됨).  \n**PowerShell 한 줄 / macOS·Linux**: README의 설치 안내.  \n키움증권과 무관한 개인 프로젝트이며 수익을 보장하지 않습니다.\n' >> notes.md
+          cat notes.md
+
+      - name: create release
+        run: |
+          gh release create "$TAG" dist/*.whl dist/*.tar.gz scripts/install.ps1 scripts/install.sh \
+            --title "ktrade ${TAG#v}" --notes-file notes.md --repo "${{ github.repository }}"
+
+  installer:
+    needs: release
+    uses: ./.github/workflows/installer.yml
+    with:
+      tag: ${{ github.ref_name }}

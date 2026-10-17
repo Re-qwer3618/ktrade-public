@@ -4,6 +4,7 @@ name: installer
 #  - 릴리스를 발행하면 그 릴리스에
 #  - 설치기 소스가 main에 바뀌면 최신 릴리스에 (덮어쓰기)
 #  - 수동 실행(Actions 탭)하면 지정한 태그(비우면 최신)에
+#  - release.yml(태그 push → 릴리스 생성)이 끝나면 그 릴리스에
 
 on:
   release:
@@ -19,6 +20,11 @@ on:
       tag:
         description: "첨부할 릴리스 태그 (비우면 최신 릴리스)"
         required: false
+  workflow_call:              # release.yml이 릴리스를 만든 뒤 부른다
+    inputs:
+      tag:
+        type: string
+        required: true
 
 permissions:
   contents: write
@@ -37,7 +43,7 @@ jobs:
         shell: pwsh
         run: |
           $tag = "${{ github.event.release.tag_name }}"
-          if (-not $tag) { $tag = "${{ github.event.inputs.tag }}" }
+          if (-not $tag) { $tag = "${{ inputs.tag }}" }
           if (-not $tag) { $tag = gh release view --repo "${{ github.repository }}" --json tagName --jq .tagName }
           if (-not $tag) { throw "릴리스가 없습니다." }
           "tag=$tag" >> $env:GITHUB_OUTPUT
