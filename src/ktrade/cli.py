@@ -18,6 +18,7 @@
     ktrade import-db <경로>             다른 SQLite DB에서 가져오기
 
   운영
+    ktrade login [--real] | logout     키움 앱키 입력·삭제 (대시보드 로그인 화면과 같음, OS 자격 증명 저장소에 보관)
     ktrade init | daily | plan [--asof] | run [--once] [--live-confirm]
     ktrade status | report | doctor [--offline] | schedule install|remove|show [--dry-run]
     ktrade dashboard [--open]        보기 전용 대시보드 (이 PC에서만)
@@ -139,21 +140,53 @@ def cmd_init(a) -> None:
     h = config_mod.home()
     for sub in ("data", "plans", "strategies", "logs", "experiments"):
         (h / sub).mkdir(parents=True, exist_ok=True)
-    cfg_path, env_path = h / "config.yaml", h / ".env"
+    cfg_path = h / "config.yaml"
     if not cfg_path.exists():
         cfg_path.write_text(config_mod.TEMPLATE, encoding="utf-8")
-    if not env_path.exists():
-        env_path.write_text("# 키움 REST API 앱키 (키움 OpenAPI 사이트에서 본인 계좌로 발급)\n"
-                            "KIWOOM_APP_KEY=\nKIWOOM_APP_SECRET=\n", encoding="utf-8")
     readme = h / "strategies" / "README.md"
     if not readme.exists():
         readme.write_text(_STRATEGIES_README, encoding="utf-8")
     docs = _copy_docs(h / "docs")
-    print(f"사용자 폴더: {h}\n  설정 {cfg_path}\n  키   {env_path}  ← 본인 앱키를 적으세요 (공유·커밋 금지)")
+    has_key = bool(config_mod.load()["_secrets"]["app_key"])
+    print(f"사용자 폴더: {h}\n  설정 {cfg_path}\n  키   " + ("저장됨" if has_key else
+          "아직 없음 ← 대시보드(ktrade dashboard --open)의 로그인 화면 또는 ktrade login 으로 입력"))
     if docs:
         print(f"  문서 {h / 'docs'}  ← 매매조건 작성 가이드(CONDITION_GUIDE.md), AI에게 붙여 넣는 규격(LLM_CONTEXT.md)")
+    print("키 없이 먼저 둘러보려면: ktrade dashboard --open → '체험 모드'")
     print("다음: ktrade collect --limit 100   (또는 ktrade import-db <기존 DB 경로>)")
     print("매매조건(종목 선정·매수 타이밍)은 직접 만듭니다: ktrade new <이름> → ktrade test <이름>")
+
+
+def cmd_login(a) -> None:
+    import getpass
+
+    from ktrade import credentials
+    print("키움 REST API 앱키를 입력합니다 (화면에 보이지 않음). 저장 위치: " + credentials.where())
+    key = (a.app_key or getpass.getpass("앱키 (App Key): ")).strip()
+    secret = getpass.getpass("시크릿키 (Secret Key): ").strip()
+    if not key or not secret:
+        sys.exit("앱키와 시크릿키를 모두 넣어 주세요.")
+    mock = not a.real
+    if not a.no_check:
+        from ktrade.data.kiwoom import KiwoomData
+        cfg = _cfg()
+        cfg["_secrets"] = {"app_key": key, "app_secret": secret}
+        cfg["kiwoom"] = {**cfg["kiwoom"], "is_mock": mock}
+        try:
+            price = KiwoomData(cfg).quote("005930").get("price")
+        except Exception as exc:
+            sys.exit(f"연결 실패: {str(exc)[:300]}\n키 종류(모의는 기본, 실전은 --real)와 키를 확인하세요. 확인 없이 저장: --no-check")
+        print(f"연결 성공 — 삼성전자 현재가 {price:,.0f}원 (조회만)" if price else "연결 성공")
+    where = credentials.save({"KIWOOM_APP_KEY": key, "KIWOOM_APP_SECRET": secret})
+    config_mod.set_is_mock(mock)
+    print(f"저장했습니다 ({where}) · kiwoom.is_mock: {str(mock).lower()}")
+
+
+def cmd_logout(a) -> None:
+    from ktrade import credentials
+    credentials.clear()
+    print("저장된 키움 키를 지웠습니다." + ("  (~/.ktrade/.env 나 환경변수에 적은 키는 직접 지우세요)"
+                                       if (config_mod.home() / ".env").exists() else ""))
 
 
 def cmd_strategies(a) -> None:
@@ -440,7 +473,7 @@ def cmd_status(a) -> None:
     cfg = _cfg()
     p = paths(cfg)
     print(f"ktrade {__version__}  home={p['home']}  broker={cfg['broker']}  is_mock={cfg['kiwoom'].get('is_mock', True)}")
-    print(f"키: {'있음' if cfg['_secrets']['app_key'] else '없음 (~/.ktrade/.env)'}")
+    print(f"키: {'있음' if cfg['_secrets']['app_key'] else '없음 (대시보드 로그인 또는 ktrade login)'}")
     try:
         print("켠 매매조건:", [f"{i.id} {i.version}" for i, _, _ in loader.enabled(cfg)])
     except Exception as exc:
@@ -597,6 +630,10 @@ def main(argv: list[str] | None = None) -> None:
                (("--exits",), {"help": 'JSON, 예: \'{"stop": {"type": "pct", "value": 5}}\''}),
                (("--note",), {"help": "이 실험 메모"})]
     add("init", cmd_init)
+    add("login", cmd_login, (("--app-key",), {"help": "앱키 (없으면 물어봄). 시크릿키는 항상 물어봄"}),
+        (("--real",), {"action": "store_true", "help": "실전투자 키 (기본은 모의투자 키)"}),
+        (("--no-check",), {"action": "store_true", "help": "키움 연결 확인 없이 저장"}))
+    add("logout", cmd_logout)
     add("strategies", cmd_strategies, aliases=("conditions",))
     add("new", cmd_new, (("id",), {}), aliases=("new-condition", "new-strategy"))
     add("validate", cmd_validate, (("id",), {}), (("--asof",), {}), (("--params",), {}))

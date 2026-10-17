@@ -48,7 +48,7 @@ class KiwoomData:
     def __init__(self, cfg: dict, max_pages_daily: int = 20):
         s = cfg["_secrets"]
         if not s["app_key"] or not s["app_secret"]:
-            raise RuntimeError("KIWOOM_APP_KEY / KIWOOM_APP_SECRET가 없습니다 (~/.ktrade/.env, ktrade init 안내 참고)")
+            raise RuntimeError("KIWOOM_APP_KEY / KIWOOM_APP_SECRET가 없습니다 — 대시보드 로그인 화면 또는 ktrade login")
         self.api = KiwoomAPI(app_key=s["app_key"], app_secret=s["app_secret"], is_mock=cfg["kiwoom"].get("is_mock", True))
         self.max_pages = max_pages_daily
 

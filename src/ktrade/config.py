@@ -1,7 +1,9 @@
 """설정 — 사용자 폴더(KTRADE_HOME, 기본 ~/.ktrade) 하나에 모두 둔다.
 
     ~/.ktrade/config.yaml   설정 (ktrade init이 기본값으로 만든다)
-    ~/.ktrade/.env          KIWOOM_APP_KEY, KIWOOM_APP_SECRET (본인 키 — 절대 공유·커밋 금지)
+    키움 앱키               대시보드 로그인 화면 또는 `ktrade login`으로 입력 → OS 자격 증명 저장소 (ktrade/credentials.py)
+                            (예전 방식 ~/.ktrade/.env·환경변수 KIWOOM_APP_KEY/SECRET도 읽으며 그쪽이 우선)
+    ~/.ktrade/demo/         체험 모드용 가상 데이터 (키 없이 둘러보기, ktrade/demo.py)
     ~/.ktrade/data/         market.db (시세·매매 기록)
     ~/.ktrade/plans/        장 마감 후 만든 계획 파일 (<기준일>/<조건>.json)
     ~/.ktrade/strategies/   내 매매조건 폴더들 (조건 하나 = 폴더 하나, strategy.yaml + strategy.py)
@@ -148,8 +150,26 @@ def load(path: Path | None = None) -> dict:
         for k, v in dotenv_values(env).items():
             os.environ.setdefault(k, v or "")
     cfg["_home"] = str(h)
-    cfg["_secrets"] = {"app_key": os.getenv("KIWOOM_APP_KEY", ""), "app_secret": os.getenv("KIWOOM_APP_SECRET", "")}
+    key, secret = os.getenv("KIWOOM_APP_KEY", ""), os.getenv("KIWOOM_APP_SECRET", "")
+    if not (key and secret):                 # 환경변수·.env에 없으면 로그인으로 저장한 키
+        from ktrade import credentials
+        saved = credentials.load_all()
+        key, secret = key or saved["KIWOOM_APP_KEY"], secret or saved["KIWOOM_APP_SECRET"]
+    cfg["_secrets"] = {"app_key": key, "app_secret": secret}
     return cfg
+
+
+def set_is_mock(is_mock: bool, path: Path | None = None) -> None:
+    """config.yaml의 kiwoom.is_mock만 바꾼다 (주석·나머지 설정은 그대로). 로그인 화면에서 키 종류를 고를 때."""
+    import re
+    p = path or home() / "config.yaml"
+    text = p.read_text(encoding="utf-8") if p.exists() else TEMPLATE
+    val = "true" if is_mock else "false"
+    new, n = re.subn(r"(?m)^(\s+is_mock:\s*)(true|false)\b", rf"\g<1>{val}", text, count=1)
+    if not n:
+        new = text.rstrip("\n") + f"\n\nkiwoom:\n  is_mock: {val}\n"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(new, encoding="utf-8")
 
 
 def paths(cfg: dict) -> dict[str, Path]:

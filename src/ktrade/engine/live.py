@@ -66,7 +66,7 @@ def run(cfg: dict, live_confirm: bool = False, once: bool = False, quote_source=
     if quote_source is None:
         if not cfg["_secrets"]["app_key"]:
             raise SystemExit("장중 시세를 받으려면 키움 앱키가 필요합니다 (paper 브로커여도 시세는 키움에서 받음). "
-                             "~/.ktrade/.env에 KIWOOM_APP_KEY·KIWOOM_APP_SECRET를 적으세요.")
+                             "대시보드 로그인 화면 또는 ktrade login 으로 입력하세요.")
         from ktrade.data.kiwoom import KiwoomData
         quote_source = KiwoomData(cfg)
     risk = Risk.from_config(cfg, broker.total_deposit())

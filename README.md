@@ -37,7 +37,7 @@
 [최신 릴리스](https://github.com/Re-qwer3618/ktrade-public/releases/latest)를 설치합니다(관리자 권한·git·파이썬 미리 설치 필요 없음).
 
 **Windows — 가장 쉬운 방법**: [ktrade-setup.exe 내려받기](https://github.com/Re-qwer3618/ktrade-public/releases/latest/download/ktrade-setup.exe) → 더블클릭 → '다음'만 누르면 됩니다.
-설치 중 인터넷에서 필요한 것을 받으며, 마지막 화면에서 키 파일(.env)을 바로 열 수 있습니다.
+설치 중 인터넷에서 필요한 것을 받으며, 마지막 화면에서 대시보드를 바로 열 수 있습니다.
 (서명되지 않은 개인 프로젝트라 "Windows의 PC 보호" 창이 뜨면 **추가 정보 → 실행**을 누르세요.)
 지우기: 설정 → 앱 → ktrade → 제거 (설정·데이터 폴더 `~/.ktrade`는 남음).
 
@@ -57,13 +57,21 @@ curl -LsSf https://raw.githubusercontent.com/Re-qwer3618/ktrade-public/main/scri
 
 | 바로가기 | 하는 일 |
 |---|---|
-| **ktrade 대시보드** | 더블클릭 → 대시보드(계획·매매 기록·성적)를 브라우저로 엶. 뜬 창을 닫으면 꺼짐 |
+| **ktrade 대시보드** | 더블클릭 → 대시보드(로그인·매매조건 실험·계획·매매 기록·성적·차트)를 브라우저로 엶. 뜬 창을 닫으면 꺼짐 |
 | **ktrade 명령창** | `ktrade` 명령을 바로 쓸 수 있는 터미널 (점검 결과를 먼저 보여 줌) |
 | **ktrade 폴더** | 설정·키·데이터·내 매매조건 폴더(`~/.ktrade`) |
 
 실행 파일 이름은 `ktrade`입니다(Windows: `%USERPROFILE%\.local\bin\ktrade.exe`). 바로가기를 다시 만들거나 지우려면 `ktrade shortcut install` / `remove`.
 
-`~/.ktrade/.env`에 본인 키움 REST API 앱키(`KIWOOM_APP_KEY`, `KIWOOM_APP_SECRET`)를 적고 `ktrade doctor`로 확인합니다.
+**처음 화면 (대시보드)**
+
+- **🔑 키움 로그인** — 본인 키움 REST API 앱키·시크릿키를 입력하면 연결을 확인하고 이 PC의 Windows 자격 증명 관리자
+  (macOS 키체인)에 저장합니다. 파일을 따로 만들 필요가 없습니다. 이어서 대시보드에서 몇 종목 시세를 받아 바로 실험할 수 있습니다.
+  명령창에서는 `ktrade login` (실전 키는 `--real`), 지우기는 `ktrade logout`.
+- **🧪 체험 모드** — 키 없이 가상 종목·가상 시세로 모든 화면(예제 매매조건 백테스트·계획·매매 기록·성적·차트)을 둘러봅니다.
+  어떤 프로그램인지 보고 계속 쓸지 정할 때. 숫자는 가상이라 의미가 없습니다.
+
+(예전 방식인 `~/.ktrade/.env`·환경변수 `KIWOOM_APP_KEY`/`KIWOOM_APP_SECRET`도 계속 읽으며, 있으면 그쪽이 우선합니다.)
 
 ## 1. 데이터 범위 정하고 받기
 

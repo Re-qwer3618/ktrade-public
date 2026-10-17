@@ -16,7 +16,7 @@ def checks(cfg: dict, online: bool = True) -> list[tuple[str, bool | None, str]]
     out.append(("ktrade·Python", sys.version_info >= (3, 11), f"ktrade {__version__}, Python {platform.python_version()}, {platform.system()}"))
     out.append(("사용자 폴더", (p["home"] / "config.yaml").exists(), f"{p['home']} (없으면 ktrade init)"))
     has_key = bool(cfg["_secrets"]["app_key"] and cfg["_secrets"]["app_secret"])
-    out.append(("키움 앱키", has_key, "~/.ktrade/.env 의 KIWOOM_APP_KEY·KIWOOM_APP_SECRET" + ("" if has_key else " — 없음")))
+    out.append(("키움 앱키", has_key, "저장됨" if has_key else "없음 — 대시보드 로그인 화면 또는 ktrade login (키 없이 둘러보기: 대시보드 체험 모드)"))
     mode = f"broker={cfg['broker']}, is_mock={cfg['kiwoom'].get('is_mock', True)}"
     out.append(("매매 모드", None if cfg["kiwoom"].get("is_mock", True) or cfg["broker"] == "paper" else False,
                 mode + ("" if cfg["kiwoom"].get("is_mock", True) or cfg["broker"] == "paper" else " — 실전 계좌!")))

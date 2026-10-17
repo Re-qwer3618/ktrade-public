@@ -49,6 +49,8 @@ def make_market(store: Store) -> list[str]:
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("KTRADE_HOME", str(tmp_path / "home"))
     monkeypatch.delenv("KIWOOM_APP_KEY", raising=False)
+    monkeypatch.delenv("KIWOOM_APP_SECRET", raising=False)
+    monkeypatch.setenv("KTRADE_NO_KEYRING", "1")      # 테스트가 실제 자격 증명 저장소를 건드리지 않게
     return tmp_path / "home"
 
 

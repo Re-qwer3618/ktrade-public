@@ -41,7 +41,7 @@ Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 [Messages]
 korean.WelcomeLabel2=국내주식 매매조건 실험 엔진 ktrade {#AppVersion} 을(를) 설치합니다.%n%n설치 중 인터넷에서 uv(파이썬 도구 관리자)와 ktrade 최신 릴리스를 받습니다. 관리자 권한이나 파이썬을 미리 설치할 필요가 없습니다.
 korean.FinishedHeadingLabel=ktrade 설치를 마쳤습니다
-korean.FinishedLabelNoIcons=다음 단계:%n%n1. 키 파일(.env)에 키움 앱키를 적고 저장 (KIWOOM_APP_KEY, KIWOOM_APP_SECRET)%n2. 바탕화면의 'ktrade 명령창'에서 ktrade doctor 로 연결 확인%n3. 'ktrade 대시보드'를 더블클릭해 화면으로 사용%n%n자세한 사용법은 설치 가이드를 참고하세요.
+korean.FinishedLabelNoIcons=바탕화면의 'ktrade 대시보드'를 더블클릭하면 브라우저에 화면이 열립니다.%n%n· 키움 앱키가 있으면: 로그인 화면에 키를 넣고 시세 받기%n· 키가 없으면: '체험 모드'로 가상 데이터로 먼저 둘러보기%n%n자세한 사용법은 설치 가이드를 참고하세요.
 
 [Tasks]
 Name: "dashboard"; Description: "대시보드 구성 요소 설치 (streamlit, 권장)"
@@ -53,7 +53,7 @@ Source: "run-install.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "uninstall.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Run]
-Filename: "notepad.exe"; Parameters: """{%USERPROFILE}\.ktrade\.env"""; Description: "키 파일(.env) 열어서 앱키 적기"; Flags: postinstall nowait skipifsilent; Check: InstallSucceeded
+Filename: "{%USERPROFILE}\.local\bin\ktrade.exe"; Parameters: "dashboard --open"; Description: "ktrade 대시보드 열기 (로그인 또는 체험 모드)"; Flags: postinstall nowait skipifsilent; Check: InstallSucceeded
 Filename: "https://github.com/Re-qwer3618/ktrade-public/blob/main/docs/INSTALL.md"; Description: "설치 가이드 보기"; Flags: postinstall shellexec nowait skipifsilent unchecked
 
 [UninstallRun]

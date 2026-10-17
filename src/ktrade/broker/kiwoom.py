@@ -25,7 +25,7 @@ class KiwoomBroker(Broker):
     def __init__(self, cfg: dict):
         s = cfg["_secrets"]
         if not s["app_key"] or not s["app_secret"]:
-            raise RuntimeError("KIWOOM_APP_KEY / KIWOOM_APP_SECRET가 없습니다 (~/.ktrade/.env)")
+            raise RuntimeError("KIWOOM_APP_KEY / KIWOOM_APP_SECRET가 없습니다 — 대시보드 로그인 화면 또는 ktrade login")
         self.api = KiwoomAPI(app_key=s["app_key"], app_secret=s["app_secret"], is_mock=cfg["kiwoom"].get("is_mock", True))
 
     def _deposit(self) -> dict:

@@ -34,8 +34,8 @@ ktrade doctor --offline || true
 cat <<'EOT'
 
 다음 단계
-  1. 키움 앱키를 ~/.ktrade/.env 에 적기 (KIWOOM_APP_KEY, KIWOOM_APP_SECRET)
-  2. ktrade doctor                     (키움 연결 확인, 조회만)
+  1. ktrade dashboard --open           (대시보드: 키움 로그인 또는 키 없이 '체험 모드')
+  2. ktrade doctor                     (키움 연결 확인, 조회만 — 명령창에서는 ktrade login 으로 키 입력)
   3. config.yaml 의 collect 에 받을 종목·기간 → ktrade collect --dry-run → ktrade collect
   4. ktrade new my_condition → strategy.py 작성 → ktrade test my_condition
   5. ktrade docs                       (작성 가이드·AI용 규격)

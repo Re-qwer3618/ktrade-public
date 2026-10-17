@@ -54,18 +54,25 @@ NO_DASHBOARD=1 NO_SHORTCUT=1 sh install.sh      # 받은 install.sh로, 명령�
 직접 설치: [uv](https://docs.astral.sh/uv/) 설치 후 `uv tool install --python 3.12 <릴리스의 .whl 주소 또는 파일>` → `ktrade init`.
 개발 중인 최신 코드는 `uv tool install --python 3.12 "git+https://github.com/Re-qwer3618/ktrade-public"` (git 필요).
 
-## 2. 키 넣기
+## 2. 로그인 (키 넣기) — 또는 체험 모드
 
-`~/.ktrade/.env` (Windows: `C:\Users\<이름>\.ktrade\.env`):
+바탕화면의 **ktrade 대시보드**를 열면(`ktrade dashboard --open`) 처음 화면에서 고릅니다.
 
-```
-KIWOOM_APP_KEY=발급받은 앱키
-KIWOOM_APP_SECRET=발급받은 시크릿키
-```
+- **키움 로그인**: 앱키·시크릿키를 넣고 키 종류(모의투자/실전투자)를 고른 뒤 **연결 확인 후 저장**.
+  삼성전자 현재가를 한 번 조회해 확인하고(주문 없음), 키는 이 PC의 Windows 자격 증명 관리자(macOS 키체인, Linux Secret Service)에
+  저장됩니다. 그런 저장소가 없는 환경에서만 `~/.ktrade/credentials.json`에 둡니다. 로그인 뒤 DB가 비어 있으면 대시보드에서
+  몇 종목 시세를 바로 받을 수 있습니다.
+- **체험 모드**: 키 없이 가상 종목·가상 시세로 모든 화면을 둘러봅니다(`~/.ktrade/demo/`, 실제 데이터와 섞이지 않음).
+
+명령창에서 하려면:
 
 ```bash
+ktrade login           # 앱키·시크릿키 입력 (모의투자 키). 실전 키는 ktrade login --real
 ktrade doctor          # ✔ 키움 API 연결 이 나오면 성공 (조회만 하고 주문은 안 함)
+ktrade logout          # 저장한 키 지우기
 ```
+
+예전 방식인 `~/.ktrade/.env`(`KIWOOM_APP_KEY=…`, `KIWOOM_APP_SECRET=…`)와 환경변수도 계속 읽으며, 있으면 그쪽이 우선합니다.
 
 ## 3. 데이터 받기 (범위는 직접 정함)
 
