@@ -36,7 +36,12 @@
 자세한 건 [설치 가이드](docs/INSTALL.md). 설치 스크립트가 [uv](https://docs.astral.sh/uv/)와 자체 파이썬 환경까지 준비하고
 [최신 릴리스](https://github.com/Re-qwer3618/ktrade-public/releases/latest)를 설치합니다(관리자 권한·git·파이썬 미리 설치 필요 없음).
 
-Windows (PowerShell):
+**Windows — 가장 쉬운 방법**: [ktrade-setup.exe 내려받기](https://github.com/Re-qwer3618/ktrade-public/releases/latest/download/ktrade-setup.exe) → 더블클릭 → '다음'만 누르면 됩니다.
+설치 중 인터넷에서 필요한 것을 받으며, 마지막 화면에서 키 파일(.env)을 바로 열 수 있습니다.
+(서명되지 않은 개인 프로젝트라 "Windows의 PC 보호" 창이 뜨면 **추가 정보 → 실행**을 누르세요.)
+지우기: 설정 → 앱 → ktrade → 제거 (설정·데이터 폴더 `~/.ktrade`는 남음).
+
+Windows (PowerShell 한 줄):
 
 ```powershell
 powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/Re-qwer3618/ktrade-public/main/scripts/install.ps1 | iex"

@@ -12,6 +12,12 @@
 
 ## 1. 설치
 
+**Windows — 설치 프로그램 (처음이라면 이것)**: [ktrade-setup.exe](https://github.com/Re-qwer3618/ktrade-public/releases/latest/download/ktrade-setup.exe)를 받아 더블클릭.
+관리자 권한 없이 설치되며, 아래 스크립트와 같은 일을 합니다(설치 중 검은 창에 진행 상황이 나오고, 인터넷 연결 필요).
+대시보드·바로가기는 설치 화면에서 끌 수 있습니다. "Windows의 PC 보호" 창이 뜨면 **추가 정보 → 실행**.
+실패하면 로그 `%LOCALAPPDATA%\ktrade-setup\install.log`를 확인하세요. 제거는 설정 → 앱 → ktrade
+(자동 실행·바로가기·프로그램을 지우고 `~/.ktrade`는 남김). 무인 설치: `ktrade-setup.exe /VERYSILENT`.
+
 **Windows** — PowerShell에서 한 줄:
 
 ```powershell

@@ -1,0 +1,61 @@
+name: installer
+
+# Windows 설치 프로그램(ktrade-setup.exe)을 빌드해 릴리스에 첨부한다.
+#  - 릴리스를 발행하면 그 릴리스에
+#  - 설치기 소스가 main에 바뀌면 최신 릴리스에 (덮어쓰기)
+#  - 수동 실행(Actions 탭)하면 지정한 태그(비우면 최신)에
+
+on:
+  release:
+    types: [published]
+  push:
+    branches: [main]
+    paths:
+      - "installer/**"
+      - "scripts/install.ps1"
+      - ".github/workflows/installer.yml"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "첨부할 릴리스 태그 (비우면 최신 릴리스)"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INNO_URL: https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: release tag
+        id: tag
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.release.tag_name }}"
+          if (-not $tag) { $tag = "${{ github.event.inputs.tag }}" }
+          if (-not $tag) { $tag = gh release view --repo "${{ github.repository }}" --json tagName --jq .tagName }
+          if (-not $tag) { throw "릴리스가 없습니다." }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$($tag.TrimStart('v'))" >> $env:GITHUB_OUTPUT
+
+      - name: install Inno Setup
+        shell: pwsh
+        run: |
+          Invoke-WebRequest $env:INNO_URL -OutFile is.exe
+          Start-Process .\is.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER',"/DIR=$env:RUNNER_TEMP\inno" -Wait
+
+      - name: build installer
+        shell: pwsh
+        run: |
+          & "$env:RUNNER_TEMP\inno\ISCC.exe" /Q "/DAppVersion=${{ steps.tag.outputs.version }}" installer\ktrade-setup.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC 실패" }
+          Get-Item dist\ktrade-setup.exe
+
+      - name: attach to release
+        shell: pwsh
+        run: gh release upload "${{ steps.tag.outputs.tag }}" dist\ktrade-setup.exe --clobber --repo "${{ github.repository }}"
