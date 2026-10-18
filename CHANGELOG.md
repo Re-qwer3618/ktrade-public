@@ -1,5 +1,11 @@
 # 변경 기록
 
+## 0.5.2 — 2026-10-18
+
+- 설치: uv 설정이 PC에 깔린 파이썬만 쓰게 해 둔 PC("Python preference is set to 'only system'")에서 실패하던 문제 —
+  설치 과정에서만 uv 관리 파이썬을 쓰고 받도록 함(`UV_PYTHON_PREFERENCE=managed`, `--python-preference managed`, PC 설정은 그대로).
+  환경변수로 막은 경우와 uv.toml로 막은 경우 모두 확인
+
 ## 0.5.1 — 2026-10-18
 
 - 설치: uv 설정이 파이썬 다운로드를 막아 둔 PC("Python downloads are set to 'never'")에서 설치가 실패하던 문제 —

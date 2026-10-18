@@ -26,11 +26,12 @@ if [ -z "$NO_DASHBOARD" ]; then
   case "$SRC" in git+*|http*) PKG="ktrade[dashboard] @ $SRC" ;; *) PKG="$SRC[dashboard]" ;; esac
 fi
 echo "ktrade 설치: $PKG"
-# uv 설정이 파이썬 다운로드를 막아 둔 PC("Python downloads are set to 'never'")에서도 되도록 이 설치에서만 허용
-export UV_PYTHON_DOWNLOADS=automatic
-uv tool install --python 3.12 --force "$PKG" || {
+# uv 설정이 파이썬 다운로드를 막거나('never') 깔린 파이썬만 쓰게 해 둔('only system') PC에서도 되도록
+# 이 설치에서만 uv 관리 파이썬을 쓰고 받게 한다 (PC 설정은 그대로)
+export UV_PYTHON_DOWNLOADS=automatic UV_PYTHON_PREFERENCE=managed
+uv tool install --python-preference managed --python 3.12 --force "$PKG" || {
   echo "파이썬 3.12로 설치하지 못했습니다. 이 PC에 있는 파이썬(3.11~3.13)으로 다시 시도합니다..."
-  uv tool install --python ">=3.11,<3.14" --force "$PKG"
+  uv tool install --python-preference system --python ">=3.11,<3.14" --force "$PKG"
 }
 export PATH="$HOME/.local/bin:$PATH"
 ktrade init
