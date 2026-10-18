@@ -54,7 +54,28 @@ if (-not $NoDashboard) {
     if ($Source -like "git+*" -or $Source -like "http*") { $pkg = "ktrade[dashboard] @ $Source" } else { $pkg = "$Source[dashboard]" }
 }
 Write-Host "ktrade 설치: $pkg" -ForegroundColor Cyan
-uv tool install --python-preference managed --python 3.12 --force "$pkg"
+# 파이썬 3.12를 먼저 받고, '실제 폴더'의 python.exe 경로를 직접 넘긴다.
+# 최신 uv는 cpython-3.12.x 폴더 옆에 cpython-3.12-... 정션(폴더 바로가기)을 만들고 `--python 3.12`로 만든 환경이 그 정션을
+# 거쳐 파이썬을 찾는다. 회사 PC 등에서 Windows가 사용자가 만든 정션 통과를 막으면(os error 448 "신뢰할 수 없는 탑재 지점")
+# 설치도 실행도 실패한다. 실제 폴더 경로를 주면 ktrade 환경이 정션을 쓰지 않는다 (uv 0.13.1로 확인).
+# --no-bin: ~/.local/bin에 python3.12.exe를 만들지 않음 (이미 있는 사용자 파이썬 바로가기를 건드리지 않게).
+function Find-ManagedPython312 {
+    $dir = (uv python dir 2>$null | Select-Object -Last 1)
+    if (-not $dir -or -not (Test-Path $dir)) { return $null }
+    $best = Get-ChildItem $dir -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^cpython-3\.12\.\d+-windows-[^-]+-none$' -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -and (Test-Path (Join-Path $_.FullName "python.exe")) } |
+        Sort-Object { [int]($_.Name -replace '^cpython-3\.12\.(\d+)-.*$', '$1') } -Descending | Select-Object -First 1
+    if ($best) { return (Join-Path $best.FullName "python.exe") }
+    return $null
+}
+uv python install 3.12 --no-bin   # 정션 확인 단계에서 실패해도(448) 파이썬 자체는 받아져 있을 수 있어 종료 코드는 보지 않는다
+$py = Find-ManagedPython312
+if ($py) {
+    Write-Host "파이썬: $py" -ForegroundColor Cyan
+    uv tool install --python "$py" --force "$pkg"
+} else {
+    uv tool install --python-preference managed --python 3.12 --force "$pkg"
+}
 if ($LASTEXITCODE -ne 0) {
     # 파이썬 3.12 다운로드가 막힌 경우(회사망 등) — 이 PC에 이미 있는 파이썬 3.11~3.13으로 다시 시도
     Write-Host "파이썬 3.12로 설치하지 못했습니다. 이 PC에 있는 파이썬(3.11~3.13)으로 다시 시도합니다..." -ForegroundColor Yellow
