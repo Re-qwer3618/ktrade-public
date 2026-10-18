@@ -26,7 +26,10 @@ try {
 } catch {
     Write-Host ""
     Write-Host "설치 실패: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "인터넷 연결을 확인하고 다시 실행해 보세요. 로그: $log" -ForegroundColor Yellow
+    Write-Host "위에 나온 빨간 error 줄이 실제 원인입니다. 흔한 경우:" -ForegroundColor Yellow
+    Write-Host "  - 인터넷 연결이 없거나 회사망이 github.com / astral.sh 다운로드를 막음" -ForegroundColor Yellow
+    Write-Host "  - 백신이 uv.exe 또는 %USERPROFILE%\.local\bin 을 막음" -ForegroundColor Yellow
+    Write-Host "로그: $log  (문의할 때 이 파일을 함께 보내 주세요)" -ForegroundColor Yellow
 }
 Stop-Transcript | Out-Null
 

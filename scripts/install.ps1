@@ -21,12 +21,21 @@ $Repo = "Re-qwer3618/ktrade-public"
 
 function Have($name) { return [bool](Get-Command $name -ErrorAction SilentlyContinue) }
 
+# 외부 프로그램(uv·ktrade)은 실패해도 PowerShell 5.1이 스크립트를 멈추지 않는다 — 종료 코드를 직접 확인해 바로 멈춘다.
+# (예전엔 uv 설치 실패 뒤에도 ktrade init까지 진행해 "'ktrade' 용어가 인식되지 않습니다"라는 엉뚱한 오류로 끝났다)
+function Check($what) { if ($LASTEXITCODE -ne 0) { throw "$what 실패 (종료 코드 $LASTEXITCODE) — 위 오류 메시지를 확인하세요." } }
+
 if (-not (Have "uv")) {
     Write-Host "uv가 없어 설치합니다 (https://astral.sh/uv)..." -ForegroundColor Cyan
     powershell -ExecutionPolicy ByPass -NoProfile -Command "irm https://astral.sh/uv/install.ps1 | iex"
     $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
     if (-not (Have "uv")) { throw "uv 설치 후에도 찾지 못했습니다. 새 PowerShell 창에서 다시 실행하세요." }
 }
+
+# ktrade는 uv가 받아 오는 자체 파이썬 3.12에서 돈다. 이 PC의 uv 설정(환경변수 UV_PYTHON_DOWNLOADS 또는 uv.toml)이
+# 파이썬 다운로드를 막아 두면("Python downloads are set to 'never'") 설치가 실패하므로, 이 설치 과정에서만 허용한다
+# (이 창의 환경변수만 바꾸며, PC 설정 자체는 그대로 둔다).
+$env:UV_PYTHON_DOWNLOADS = "automatic"
 
 if (-not $Source) {
     Write-Host "최신 릴리스 확인: https://github.com/$Repo/releases" -ForegroundColor Cyan
@@ -43,11 +52,19 @@ if (-not $NoDashboard) {
 }
 Write-Host "ktrade 설치: $pkg" -ForegroundColor Cyan
 uv tool install --python 3.12 --force "$pkg"
+if ($LASTEXITCODE -ne 0) {
+    # 파이썬 3.12 다운로드가 막힌 경우(회사망 등) — 이 PC에 이미 있는 파이썬 3.11~3.13으로 다시 시도
+    Write-Host "파이썬 3.12로 설치하지 못했습니다. 이 PC에 있는 파이썬(3.11~3.13)으로 다시 시도합니다..." -ForegroundColor Yellow
+    uv tool install --python ">=3.11,<3.14" --force "$pkg"
+    Check "ktrade 설치(uv tool install)"
+}
 if (-not $NoShellUpdate) { uv tool update-shell | Out-Null }
 $bin = if ($env:UV_TOOL_BIN_DIR) { $env:UV_TOOL_BIN_DIR } else { "$env:USERPROFILE\.local\bin" }
 $env:Path = "$bin;$env:Path"
+if (-not (Test-Path (Join-Path $bin "ktrade.exe"))) { throw "ktrade 설치가 끝났지만 $bin\ktrade.exe 가 없습니다." }
 
 ktrade init
+Check "ktrade init"
 if (-not $NoShortcut) {
     Write-Host ""
     ktrade shortcut install

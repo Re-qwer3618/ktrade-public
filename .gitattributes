@@ -3,3 +3,4 @@
 *.bat text eol=crlf
 /.maintainer export-ignore
 *.iss text eol=crlf
+/ktrade-setup.exe export-ignore
