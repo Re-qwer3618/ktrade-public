@@ -18,18 +18,29 @@ ktrade는 **나만의 매매기법을 실험하는 엔진**입니다(키움증�
 ~/.ktrade/                          (Windows: C:\Users\<이름>\.ktrade)
   config.yaml                       ← 엔진 공통 손절·익절(exits), 켤 매매조건(strategies.enabled)
   strategies/
-    my_condition/                   ← 매매조건 하나 = 폴더 하나 (폴더 이름 = 조건 id)
-      strategy.yaml                 ←   id·version·params, (선택) 이 조건만 쓸 exits
-      strategy.py                   ←   Condition.select() — 종목 선정 + 매수 타이밍
+    my_condition.py                 ← 매매조건 하나 = 파일 하나 (파일 이름 = 조건 id)
+                                    ←   Condition.select() — 종목 선정 + 매수 타이밍,
+                                    ←   클래스 속성 version·description·default_params, (선택) exits
   experiments/my_condition/         ← ktrade test 할 때마다 쌓이는 실험 기록(지표 json + 거래 csv)
   docs/                             ← 이 가이드·AI용 규격 사본
 ```
+
+**다른 폴더에 두기**: `config.yaml`의 `strategies.dirs`에 폴더를 적으면 그 폴더도 읽고, `ktrade new`는 첫 폴더에 만듭니다
+(git으로 관리하는 폴더에 두고 여러 PC에서 같이 쓰기 좋음). `~`와 환경변수(`${DEV_ROOT}`, `%DEV_ROOT%`)를 쓸 수 있습니다.
+
+```yaml
+strategies:
+  dirs: ["${DEV_ROOT}/project/ktrade-strategies"]
+```
+
+**폴더 방식(예전)**: `ktrade new my_condition --folder` → `my_condition/strategy.yaml`(id·version·params·exits) +
+`strategy.py`. params를 코드와 따로 yaml로 두고 싶을 때만 씁니다. 동봉 예제 2개가 이 방식입니다.
 
 | 단계 | 명령 |
 |---|---|
 | 0. 데이터 | `config.yaml`의 `collect`에 받을 종목·시장·기간 → `ktrade collect` → `ktrade data`로 범위 확인 |
 | 1. 뼈대 | `ktrade new my_condition` |
-| 2. 작성 | `strategy.py`의 '종목 선정'·'매수 타이밍' 두 곳 — 직접 또는 AI (아래) |
+| 2. 작성 | `my_condition.py`의 '종목 선정'·'매수 타이밍' 두 곳 — 직접 또는 AI (아래) |
 | 3. 실험 | `ktrade test my_condition` = 검사 + 백테스트 + 직전 실험과 비교. 기간·대상 종목은 `config.yaml`의 `backtest` 또는 `--start --end --symbols` (DB에 있는 범위 안에서만) |
 | 4. 고치고 다시 | 조건·파라미터·청산 중 무엇을 바꾸든 `ktrade test` → `ktrade experiments my_condition`으로 이력 |
 | 5. 켜기 | `config.yaml` → `strategies.enabled: [{id: my_condition}]` (지금 설정으로 실험한 기록이 있어야 실행됨) |
@@ -81,7 +92,7 @@ class MyCondition(Condition):
 
 ## 손절·이익실현 (엔진 설정)
 
-`config.yaml`의 `exits`가 모든 조건의 기본이고, 조건별로 `strategy.yaml`의 `exits`(또는 `enabled[].exits`)로 덮어씁니다.
+`config.yaml`의 `exits`가 모든 조건의 기본이고, 조건별로 클래스의 `exits` 속성(폴더 방식이면 `strategy.yaml`의 `exits`, 또는 `enabled[].exits`)으로 덮어씁니다.
 
 ```yaml
 exits:

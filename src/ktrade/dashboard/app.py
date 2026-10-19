@@ -370,7 +370,7 @@ def tab_help(demo_mode: bool) -> None:
 **ktrade로 하는 일** — 매매조건(종목 선정 + 매수 타이밍)은 내가, 손절·익절·실행·백테스트는 엔진이 합니다.
 
 1. **데이터 받기** — {'키움 로그인 후 대시보드에서 몇 종목, 또는 명령창에서 `ktrade collect`' if demo_mode else '명령창에서 `ktrade collect` (범위는 `~/.ktrade/config.yaml`의 collect)'}
-2. **매매조건 만들기** — `ktrade new 내조건` → `~/.ktrade/strategies/내조건/strategy.py` 작성.
+2. **매매조건 만들기** — `ktrade new 내조건` → 매매조건 폴더(`config.yaml` `strategies.dirs`, 기본 `~/.ktrade/strategies`)에 생긴 `내조건.py` 하나만 작성.
    직접 쓰기 어렵다면 `~/.ktrade/docs/LLM_CONTEXT.md`를 Claude·Gemini에 붙여 넣고 원하는 매매기법을 설명하면 코드를 써 줍니다.
 3. **실험** — `ktrade test 내조건` 또는 이 화면의 **매매조건 실험** 탭에서 백테스트. 바꿀 때마다 기록이 쌓여 비교됩니다.
 4. **켜기** — 마음에 들면 `config.yaml`의 `strategies.enabled`에 추가 → 장 마감 후 다음 날 계획이 생깁니다 (**계획** 탭).

@@ -1,7 +1,7 @@
 # ktrade 매매조건 작성 규격 (AI에게 붙여 넣는 문서)
 
 > **쓰는 법**: Claude·Gemini·ChatGPT 같은 AI 채팅에 이 문서 전체를 붙여 넣고, 맨 아래 "요청 양식"을 채워 보내세요.
-> AI가 `strategy.yaml`과 `strategy.py` 두 파일을 써 주면 `~/.ktrade/strategies/<조건 id>/`에 저장하고 `ktrade test <조건 id>`를 실행합니다
+> AI가 `<조건 id>.py` 파일 하나를 써 주면 매매조건 폴더(`config.yaml` `strategies.dirs`, 기본 `~/.ktrade/strategies/`)에 저장하고 `ktrade test <조건 id>`를 실행합니다
 > (검사 + 백테스트 + 이전 실험과 비교). 직접 작성해도 같은 규격입니다.
 > ktrade는 키움증권 REST API로 만든 **매매기법 실험 엔진**입니다. 과거 데이터로 조건의 확률을 재 볼 뿐, 실전 수익을 보장하지 않습니다.
 
@@ -12,9 +12,9 @@
 당신은 ktrade용 **매매조건 플러그인**을 작성한다. 매매조건 = **종목 선정 + 매수 타이밍** 두 가지뿐이다.
 **손절·이익실현·보유기간은 쓰지 않는다** — 엔진이 사용자 설정(exits)으로 처리하고, 실전과 백테스트에서 똑같이 적용한다.
 
-출력은 두 파일뿐이다.
-1. `strategy.yaml` — manifest
-2. `strategy.py` — `ktrade.sdk.Condition`을 상속한 클래스 하나, `select(ctx) -> list[Pick]` 구현
+출력은 파일 하나뿐이다: `<조건 id>.py` (파일 이름 = 조건 id, 영문 소문자·숫자·_).
+- `ktrade.sdk.Condition`을 상속한 클래스 하나, `select(ctx) -> list[Pick]` 구현
+- 클래스 속성: `version`, `description`, `default_params`, (선택) `exits` — 값은 리터럴로 직접 적는다(엔진이 실행하지 않고 읽음)
 
 지켜야 할 것:
 - import는 `ktrade.sdk`, `pandas`, `numpy`, 파이썬 표준 라이브러리의 계산용 모듈(math, statistics, datetime 등)만.
@@ -33,23 +33,25 @@
 3. 다음 거래일: `Pick.entry` 조건이 맞으면 매수 → 엔진 규칙으로 손절·익절·추적 손절·보유기간 매도.
 4. 백테스트(`ktrade test`)는 과거 거래일마다 1~3을 똑같이 돌려 승률(95% 구간)·평균 수익·시장 대비·앞뒤 기간 일관성을 낸다.
 
-## strategy.yaml
+## 클래스 속성 (파일 맨 위 설정)
 
-```yaml
-id: my_condition         # 영문 소문자·숫자·_ 만, 폴더 이름과 같게
-version: v1              # 조건을 바꾸면 v2, v3 … (실험 기록이 버전별로 쌓임)
-kind: condition
-entry: strategy.py:MyCondition
-description: 한 줄 설명
-author: 작성자
-params: {}               # 비워 두면 strategy.py의 default_params
-# exits:                 # (선택) 이 조건만 손절·익절을 다르게 — 코드가 아니라 설정
-#   stop: {type: pct, value: 5}            # pct | atr(value=배수, period) | low(value=N일, buffer_pct) | none
-#   take_profit: {type: r, value: 2}       # pct | r(손절폭 배수) | none
-#   trailing: {activate_pct: 5, trail_pct: 4}
-#   max_hold_days: 10
-#   stop_check: close                      # close(15:10 이후 판단) | intraday(닿는 즉시)
+```python
+class MyCondition(Condition):
+    version = "v1"               # 조건을 바꾸면 v2, v3 … (실험 기록이 버전별로 쌓임)
+    description = "한 줄 설명"
+    author = "작성자"            # (선택)
+    default_params = {"lookback": 20, "max_plans": 5}   # 숫자 기준은 전부 여기
+    # (선택) 이 조건만 손절·익절을 다르게 — 코드가 아니라 설정
+    # exits = {
+    #     "stop": {"type": "pct", "value": 5},          # pct | atr(value=배수, period) | low(value=N일, buffer_pct) | none
+    #     "take_profit": {"type": "r", "value": 2},     # pct | r(손절폭 배수) | none
+    #     "trailing": {"activate_pct": 5, "trail_pct": 4},
+    #     "max_hold_days": 10,
+    #     "stop_check": "close",                        # close(15:10 이후 판단) | intraday(닿는 즉시)
+    # }
 ```
+
+(예전 폴더 방식 — `<id>/strategy.yaml` + `strategy.py` — 도 계속 읽지만, 새로 쓸 때는 파일 하나로.)
 
 ## SDK
 
@@ -99,7 +101,7 @@ Pick(
 
 엔진 검사: 가격 > 0, `min_price < max_price`, 가격이 기준일 종가 ±30% 안, symbol 6자리, 하루 계획 수 한도, 다른 조건과 종목 중복(우선순위 높은 쪽).
 
-## 완성 예제
+## 완성 예제 (파일 `breakout_example.py`)
 
 ```python
 """20일 최고 종가를 과열 없이 돌파한 종목을 다음 날 확인 후 산다 (예시 — 검증된 조건 아님)."""
@@ -107,6 +109,8 @@ from ktrade.sdk import Condition, Context, Entry, Pick
 
 
 class Breakout(Condition):
+    version = "v1"
+    description = "20일 최고 종가 돌파 → 다음 날 확인 매수 (예시)"
     default_params = {"lookback": 20, "min_price": 2000, "min_avg_value": 5e8, "max_vol_ratio": 4.0,
                       "chase_pct": 5, "max_plans": 5}
 
@@ -146,7 +150,7 @@ class Breakout(Condition):
 ## 요청 양식 (사용자가 채워서 보냄)
 
 ```
-위 ktrade 매매조건 규격대로 strategy.yaml, strategy.py 두 파일을 써 줘. 손절·익절은 쓰지 마 (엔진 설정 몫).
+위 ktrade 매매조건 규격대로 <조건 id>.py 파일 하나를 써 줘. 손절·익절은 쓰지 마 (엔진 설정 몫).
 
 - 조건 id: (예: box_breakout)
 - 종목 선정: (예: 최근 60일 박스권 상단을 종가로 넘고, 거래량이 20일 평균의 1.5~4배, 주가 2천원 이상, 20일 평균 거래대금 5억 이상)
@@ -154,7 +158,7 @@ class Breakout(Condition):
 - 매수 타이밍: (예: 다음 날 시가가 돌파일 종가 이상이고 15시 10분 이후에도 그 위면, 돌파일 종가 +5%까지 / 또는 다음 날 시가 / 또는 20일선 근처로 눌리면)
 - 하루 최대 후보 수: (예: 5)
 - 우선순위: (예: 거래대금 큰 순)
-- (선택) 이 조건만 쓸 손절·익절: (예: 손절 박스 하단 = 60일 최저가 -1%, 익절 손절폭의 2배) → strategy.yaml의 exits로
+- (선택) 이 조건만 쓸 손절·익절: (예: 손절 박스 하단 = 60일 최저가 -1%, 익절 손절폭의 2배) → 클래스의 exits 속성으로
 ```
 
 받은 뒤: `ktrade test <id>` → 오류가 나면 출력 그대로 AI에게 보여 주고 고치게 → 통과하면 결과(승률·95% 구간·앞뒤 기간 일관성)를 보고

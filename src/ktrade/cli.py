@@ -1,7 +1,7 @@
 """ktrade 명령 — 매매조건 실험 엔진.
 
   매매조건 만들기·실험 (조건을 바꾸거나 더할 때마다)
-    ktrade new <id>                  내 매매조건 뼈대 (~/.ktrade/strategies/<id>) — 종목 선정 + 매수 타이밍만 작성
+    ktrade new <id>                  내 매매조건 뼈대 (<id>.py 파일 하나, strategies.dirs 첫 폴더 또는 ~/.ktrade/strategies)
     ktrade test <id>                 검사 + 백테스트 + 이전 실험과 비교 (한 번에)
     ktrade validate <id> [--asof]    검사만 (형식·금지 사항·실행 결과·엔진 검사)
     ktrade backtest <id> [--start --end] [--symbols …] [--exits JSON] [--params JSON]   백테스트만
@@ -42,14 +42,14 @@ _TEMPLATE = '''"""{id} — 내 매매조건.
 여기서 정하는 것은 두 가지뿐:
   1) 종목 선정: 기준일(ctx.asof) 장 마감 기준으로 어떤 종목을 고를지
   2) 매수 타이밍: 다음 거래일에 어떤 가격 조건에서 살지 (Entry.confirm / Entry.at_open / Entry.pullback)
-손절·이익실현·보유기간은 엔진이 정한다 (config.yaml 또는 strategy.yaml의 exits).
+손절·이익실현·보유기간은 엔진이 정한다 (config.yaml exits, 이 조건만 바꾸려면 아래 클래스의 exits).
 바꿀 때마다: ktrade test {id}
 """
 from ktrade.sdk import Condition, Context, Entry, Pick
 
 
 class MyCondition(Condition):
-    default_params = {{"lookback": 20, "min_price": 2000, "min_avg_value": 5e8, "max_plans": 5}}
+{header}    default_params = {{"lookback": 20, "min_price": 2000, "min_avg_value": 5e8, "max_plans": 5}}
 
     def select(self, ctx: Context) -> list[Pick]:
         p = self.params
@@ -94,7 +94,9 @@ params: {{}}          # 기본값은 strategy.py의 default_params. 여기나 co
 
 _STRATEGIES_README = """# 내 매매조건 폴더
 
-매매조건 하나 = 이 아래 폴더 하나 (폴더 이름 = 조건 id). 안에 strategy.yaml + strategy.py.
+매매조건 하나 = 이 아래 파일 하나 (my_condition.py, 파일 이름 = 조건 id).
+예전 방식인 폴더 하나(my_condition/strategy.yaml + strategy.py)도 읽습니다 (ktrade new --folder).
+다른 폴더(예: git으로 관리하는 폴더)에 두려면 config.yaml strategies.dirs에 적으세요 — ktrade new도 그곳에 만듭니다.
 작성하는 것: 종목 선정 + 매수 타이밍. 손절·이익실현·보유기간·실행·백테스트는 엔진이 한다.
 
     ktrade new my_condition         # 뼈대 만들기
@@ -211,14 +213,36 @@ def cmd_strategies(a) -> None:
         print(f"!! 무시한 폴더 {folder}\n     {why}")
 
 
+_SINGLE_HEADER = """    version = "v1"                      # 조건을 크게 바꾸면 올린다 (실험 기록에 남음)
+    description = "내 매매조건 설명"
+    # 손절·익절을 이 조건만 다르게 하려면 (없으면 config.yaml exits):
+    # exits = {"stop": {"type": "pct", "value": 5}, "take_profit": {"type": "r", "value": 2}, "max_hold_days": 10}
+"""
+
+
 def cmd_new(a) -> None:
-    d = paths(_cfg())["strategies"] / a.id
-    if d.exists():
-        sys.exit(f"이미 있습니다: {d}")
-    d.mkdir(parents=True)
-    (d / "strategy.yaml").write_text(_MANIFEST.format(id=a.id), encoding="utf-8")
-    (d / "strategy.py").write_text(_TEMPLATE.format(id=a.id), encoding="utf-8")
-    print(f"만들었습니다: {d}\n  1) strategy.py 에서 '종목 선정'과 '매수 타이밍' 두 곳을 고치고\n"
+    """기본은 파일 하나(<id>.py), --folder면 예전 방식(폴더 + strategy.yaml). 위치는 strategies.dirs 첫 폴더."""
+    from ktrade.engine import loader
+    cfg = _cfg()
+    found = loader.discover(cfg)
+    if a.id in found:
+        sys.exit(f"이미 같은 이름의 매매조건이 있습니다: {found[a.id].source}")
+    base = loader.new_dir(cfg)
+    base.mkdir(parents=True, exist_ok=True)
+    if a.folder:
+        target, edit = base / a.id, "strategy.py"
+        if target.exists():
+            sys.exit(f"이미 있습니다: {target}")
+        target.mkdir()
+        (target / "strategy.yaml").write_text(_MANIFEST.format(id=a.id), encoding="utf-8")
+        (target / "strategy.py").write_text(_TEMPLATE.format(id=a.id, header=""), encoding="utf-8")
+    else:
+        target = base / f"{a.id}.py"
+        edit = target.name
+        if target.exists():
+            sys.exit(f"이미 있습니다: {target}")
+        target.write_text(_TEMPLATE.format(id=a.id, header=_SINGLE_HEADER), encoding="utf-8")
+    print(f"만들었습니다: {target}\n  1) {edit} 에서 '종목 선정'과 '매수 타이밍' 두 곳을 고치고\n"
           f"  2) ktrade test {a.id}\n  3) config.yaml strategies.enabled 에 '- id: {a.id}' 추가")
 
 
@@ -635,7 +659,9 @@ def main(argv: list[str] | None = None) -> None:
         (("--no-check",), {"action": "store_true", "help": "키움 연결 확인 없이 저장"}))
     add("logout", cmd_logout)
     add("strategies", cmd_strategies, aliases=("conditions",))
-    add("new", cmd_new, (("id",), {}), aliases=("new-condition", "new-strategy"))
+    add("new", cmd_new, (("id",), {}),
+        (("--folder",), {"action": "store_true", "help": "파일 하나 대신 폴더(strategy.yaml + strategy.py)로 만들기"}),
+        aliases=("new-condition", "new-strategy"))
     add("validate", cmd_validate, (("id",), {}), (("--asof",), {}), (("--params",), {}))
     add("test", cmd_test, (("id",), {}), *bt_args)
     add("backtest", cmd_backtest, (("id",), {}), *bt_args)

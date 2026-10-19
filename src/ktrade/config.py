@@ -6,7 +6,7 @@
     ~/.ktrade/demo/         체험 모드용 가상 데이터 (키 없이 둘러보기, ktrade/demo.py)
     ~/.ktrade/data/         market.db (시세·매매 기록)
     ~/.ktrade/plans/        장 마감 후 만든 계획 파일 (<기준일>/<조건>.json)
-    ~/.ktrade/strategies/   내 매매조건 폴더들 (조건 하나 = 폴더 하나, strategy.yaml + strategy.py)
+    ~/.ktrade/strategies/   내 매매조건 (조건 하나 = <id>.py 파일 하나, 또는 폴더 하나) — strategies.dirs로 다른 폴더 추가
     ~/.ktrade/experiments/  백테스트 실험 기록 (조건을 바꿀 때마다 쌓이고 비교된다)
 
 역할: 매매조건(종목 선정·매수 타이밍)은 사용자, 손절·이익실현·보유기간(exits)·실행·백테스트는 엔진.
@@ -45,7 +45,7 @@ DEFAULTS: dict = {
         "max_plans_per_strategy": 20,      # 조건 하나가 하루에 낼 수 있는 계획 수 한도
     },
     "strategies": {
-        "dirs": [],                        # 추가로 조건을 찾을 폴더 (KTRADE_HOME/strategies는 항상 포함)
+        "dirs": [],                        # 추가로 조건을 찾을 폴더 (첫 폴더에 ktrade new가 만듦, ${ENV} 사용 가능)
         "enabled": [],                     # [{id: example_breakout, params: {...}, exits: {...}}] — 위에 있을수록 우선
         "require_backtest": True,          # 지금 설정으로 백테스트한 기록이 없는 조건은 계획을 만들지 않음
     },
@@ -99,7 +99,7 @@ risk:
   max_plans_per_strategy: 20
 
 strategies:
-  dirs: []
+  dirs: []                      # 내 매매조건 폴더 (첫 폴더에 ktrade new가 만듦). 예: ["D:/trading/my-conditions"], ["${DEV_ROOT}/conditions"]
   require_backtest: true        # 백테스트 안 한 설정의 조건은 실행하지 않음 (조건을 바꾸면 ktrade test <id>)
   enabled: []                   # 실행할 내 매매조건 (위에 있을수록 우선). 예:
   #  - id: my_condition

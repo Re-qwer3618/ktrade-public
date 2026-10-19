@@ -76,7 +76,9 @@ def test_llm_context_example_is_a_working_condition(market, cfg, home):
     text = (DOCS / "LLM_CONTEXT.md").read_text(encoding="utf-8")
     code = re.search(r"## 완성 예제.*?```python\n(.*?)```", text, re.S).group(1)
     cls = re.search(r"class (\w+)\(Condition\)", code).group(1)
-    _write(home, "doc_example", code, cls=cls)
+    assert cls
+    (home / "strategies").mkdir(parents=True, exist_ok=True)
+    (home / "strategies" / "doc_example.py").write_text(code, encoding="utf-8")   # 문서대로 파일 하나
     rep = V.validate(cfg, "doc_example", asof=days[59], params={"min_avg_value": 0})
     assert rep.ok, rep.render()
     assert any("엔진 검사 통과 1개" in n for n in rep.notes), rep.render()
@@ -102,3 +104,50 @@ def test_docs_command_copies(home, capsys):
     cli.main(["docs"])
     out = capsys.readouterr().out
     assert "LLM_CONTEXT.md" in out and (paths({"_home": str(home)})["home"] / "docs" / "LLM_CONTEXT.md").exists()
+
+
+SINGLE = """\"\"\"한 파일 조건.\"\"\"
+from ktrade.sdk import Condition, Context, Entry, Pick
+
+
+class One(Condition):
+    version = "v3"
+    description = "파일 하나짜리"
+    exits = {"stop": {"type": "pct", "value": 4}}
+    default_params = {"n": 1}
+
+    def select(self, ctx: Context) -> list[Pick]:
+        return []
+"""
+
+
+def test_single_file_condition_is_discovered_and_loaded(cfg, home):
+    from ktrade.engine import loader
+    (home / "strategies").mkdir(parents=True, exist_ok=True)
+    (home / "strategies" / "one_file.py").write_text(SINGLE, encoding="utf-8")
+    (home / "strategies" / "_helper.py").write_text("X = 1\n", encoding="utf-8")       # _로 시작하면 조건 아님
+    found = loader.discover(cfg)
+    info = found["one_file"]
+    assert (info.version, info.description, info.entry) == ("v3", "파일 하나짜리", "one_file.py:One")
+    assert info.exits == {"stop": {"type": "pct", "value": 4}} and "_helper" not in found
+    assert loader.load(info, {"n": 2}).params == {"n": 2}
+    before = info.code_hash
+    (home / "strategies" / "one_file.py").write_text(SINGLE.replace('"v3"', '"v4"'), encoding="utf-8")
+    assert loader.discover(cfg)["one_file"].code_hash != before
+
+
+def test_new_writes_single_file_into_first_strategies_dir(cfg, home, tmp_path, monkeypatch, capsys):
+    from ktrade.engine import loader
+    import ktrade.cli as C
+    monkeypatch.setenv("KT_TEST_ROOT", str(tmp_path))
+    cfg["strategies"]["dirs"] = ["${KT_TEST_ROOT}/mine"]
+    monkeypatch.setattr(C, "_cfg", lambda: cfg)
+    cli.main(["new", "my_cond"])
+    f = tmp_path / "mine" / "my_cond.py"
+    assert f.exists() and str(f) in capsys.readouterr().out
+    info = loader.discover(cfg)["my_cond"]
+    assert info.source == str(f) and info.version == "v1"
+    assert not any("불러오기 실패" in e for e in V.validate(cfg, "my_cond").errors)
+    cli.main(["new", "old_style", "--folder"])
+    assert (tmp_path / "mine" / "old_style" / "strategy.yaml").exists()
+    assert "old_style" in loader.discover(cfg)

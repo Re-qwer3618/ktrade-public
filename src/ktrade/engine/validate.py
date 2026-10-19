@@ -72,12 +72,14 @@ def validate(cfg: dict, strategy_id: str, asof: str | None = None, params: dict 
     rep = Report(strategy_id)
     found = loader.discover(cfg)
     if strategy_id not in found:
-        rep.errors.append(f"전략 '{strategy_id}'를 찾지 못했습니다 — 폴더 위치: {paths(cfg)['strategies']}/<id>/strategy.yaml")
+        where = ", ".join(str(d) for d in loader.search_dirs(cfg)) or str(paths(cfg)["strategies"])
+        rep.errors.append(f"전략 '{strategy_id}'를 찾지 못했습니다 — 찾은 폴더: {where} "
+                          f"(<id>.py 또는 <id>/strategy.yaml, 새로 만들기: ktrade new {strategy_id})")
         return rep
     info = found[strategy_id]
     rep.notes.append(f"위치 {info.source}, 버전 {info.version}, 코드 지문 {info.code_hash}")
     if not info.source.startswith("entry-point:"):
-        f = Path(info.source) / info.entry.partition(":")[0]
+        f = loader.entry_file(info)
         if not f.exists():
             rep.errors.append(f"entry 파일이 없습니다: {f}")
             return rep

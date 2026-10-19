@@ -24,7 +24,7 @@
 | **받을 데이터 범위** — 종목·시장·기간 (설정) | 키움 REST API로 받아 DB에 쌓기(이어받기) |
 
 ```
-~/.ktrade/strategies/<조건 id>/strategy.yaml + strategy.py   ← 매매조건 (직접 또는 Claude·Gemini 등 AI로 작성)
+~/.ktrade/strategies/<조건 id>.py                             ← 매매조건 파일 하나 (직접 또는 AI로 작성, strategies.dirs로 위치 변경)
 ~/.ktrade/config.yaml  collect / backtest                    ← 받을 데이터 범위, 백테스트 기간·대상 종목
 ~/.ktrade/config.yaml  exits / strategies.enabled            ← 엔진 손절·익절 설정, 켤 조건
 ~/.ktrade/data/market.db                                     ← 키움에서 받은 시세 (ktrade data로 범위 확인)
@@ -113,7 +113,7 @@ backtest:
 ```
 
 ```bash
-ktrade new my_condition           # 매매조건 뼈대 — strategy.py의 '종목 선정'·'매수 타이밍' 두 곳만 고친다
+ktrade new my_condition           # 매매조건 뼈대 my_condition.py — '종목 선정'·'매수 타이밍' 두 곳만 고친다
 ktrade test my_condition          # 검사 + 백테스트 + 직전 실험과 비교 (조건을 바꿀 때마다)
 ktrade test my_condition --start 2021-01-04 --end 2023-12-29 --symbols 005930,000660   # 이번만 이 기간·종목
 ktrade experiments my_condition   # 이 조건의 실험 이력

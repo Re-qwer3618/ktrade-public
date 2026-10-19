@@ -1,5 +1,12 @@
 # 변경 기록
 
+## 다음 버전 (미출시)
+
+- 매매조건을 **파일 하나**(`<id>.py`)로 쓸 수 있음 — 파일 이름이 조건 id, version·description·default_params·exits는 클래스 속성
+  (실행하지 않고 읽음). 예전 폴더 방식(`<id>/strategy.yaml` + `strategy.py`)도 그대로 읽음
+- `ktrade new`가 `config.yaml` `strategies.dirs`의 첫 폴더에 만듦(없으면 `~/.ktrade/strategies`), 기본은 파일 하나. 폴더 방식은 `--folder`
+- `strategies.dirs`에 환경변수(`${DEV_ROOT}`, `%DEV_ROOT%`)와 `~` 사용 가능 — 여러 PC에서 같은 설정으로 git 폴더를 가리킬 수 있음
+
 ## 0.5.3 — 2026-10-18
 
 - 설치(Windows): "os error 448 — 경로에 신뢰할 수 없는 탑재 지점이 포함" 오류 수정. 최신 uv는 파이썬 폴더 옆에 정션(폴더 바로가기)을
