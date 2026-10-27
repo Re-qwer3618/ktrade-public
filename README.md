@@ -24,7 +24,7 @@
 | **받을 데이터 범위** — 종목·시장·기간 (설정) | 키움 REST API로 받아 DB에 쌓기(이어받기) |
 
 ```
-~/.ktrade/strategies/<조건 id>.py                             ← 매매조건 파일 하나 (직접 또는 AI로 작성, strategies.dirs로 위치 변경)
+~/.ktrade/strategies/<조건 id>/strategy.yaml + strategy.py   ← 매매조건 (직접 또는 Claude·Gemini 등 AI로 작성)
 ~/.ktrade/config.yaml  collect / backtest                    ← 받을 데이터 범위, 백테스트 기간·대상 종목
 ~/.ktrade/config.yaml  exits / strategies.enabled            ← 엔진 손절·익절 설정, 켤 조건
 ~/.ktrade/data/market.db                                     ← 키움에서 받은 시세 (ktrade data로 범위 확인)
@@ -57,7 +57,7 @@ curl -LsSf https://raw.githubusercontent.com/Re-qwer3618/ktrade-public/main/scri
 
 | 바로가기 | 하는 일 |
 |---|---|
-| **ktrade 대시보드** | 더블클릭 → 대시보드(로그인·매매조건 실험·계획·매매 기록·성적·차트)를 브라우저로 엶. 뜬 창을 닫으면 꺼짐 |
+| **ktrade 대시보드** | 더블클릭 → 대시보드(로그인·운영·매매조건 실험·계획·매매 기록·성적·차트)를 브라우저로 엶. 뜬 창을 닫으면 꺼짐 |
 | **ktrade 명령창** | `ktrade` 명령을 바로 쓸 수 있는 터미널 (점검 결과를 먼저 보여 줌) |
 | **ktrade 폴더** | 설정·키·데이터·내 매매조건 폴더(`~/.ktrade`) |
 
@@ -72,6 +72,16 @@ curl -LsSf https://raw.githubusercontent.com/Re-qwer3618/ktrade-public/main/scri
   어떤 프로그램인지 보고 계속 쓸지 정할 때. 숫자는 가상이라 의미가 없습니다.
 
 (예전 방식인 `~/.ktrade/.env`·환경변수 `KIWOOM_APP_KEY`/`KIWOOM_APP_SECRET`도 계속 읽으며, 있으면 그쪽이 우선합니다.)
+
+**🕹️ 운영 탭 (영웅문 조건식 자동매매)**
+
+- 위: 모드(paper·모의·실전), 조건식 엔진·`ktrade run` 동작 여부, 오늘 손익(실현·평가), **긴급 정지**(오늘 신규 매수 중지 + 보유 전량 매도)
+- 왼쪽 설정 5단계: ① 조건식(영웅문 목록 불러오기, 매매/관찰, 매수 시간·하루 한도·확인 초·추격 한도·이탈 매도) → ② 익절·손절·추적 손절
+  → ③ 분할매수·분할익절 → ④ 리스크 한도(종목당 금액, 동시 보유, 하루 수익 목표·손실 한도, 미체결 취소, 매수 시간대, 시간 일괄청산)
+  → 저장(`config.yaml`, 바꾸기 전 파일은 `config.yaml.bak`) → ⑤ 시작·중지
+- 오른쪽: 편입 종목 · 보유 · 미체결 · 체결, 실시간 로그 (3초마다 갱신)
+- 대시보드가 직접 주문하지는 않습니다. **시작**은 `ktrade hts watch`를 따로 띄우고(대시보드를 닫아도 계속), 주문은 그 엔진이 냅니다.
+  조건식 매매는 paper·키움 모의투자에서만 주문하고 실전 계좌는 막혀 있습니다.
 
 ## 1. 데이터 범위 정하고 받기
 
@@ -113,7 +123,7 @@ backtest:
 ```
 
 ```bash
-ktrade new my_condition           # 매매조건 뼈대 my_condition.py — '종목 선정'·'매수 타이밍' 두 곳만 고친다
+ktrade new my_condition           # 매매조건 뼈대 — strategy.py의 '종목 선정'·'매수 타이밍' 두 곳만 고친다
 ktrade test my_condition          # 검사 + 백테스트 + 직전 실험과 비교 (조건을 바꿀 때마다)
 ktrade test my_condition --start 2021-01-04 --end 2023-12-29 --symbols 005930,000660   # 이번만 이 기간·종목
 ktrade experiments my_condition   # 이 조건의 실험 이력
@@ -137,9 +147,15 @@ exits:
   trailing: {activate_pct: null, trail_pct: null}
   max_hold_days: 10
   stop_check: close                    # close(15:10 이후 판단) | intraday(닿는 즉시)
+  scale_in:  [{pct: 50}, {pct: 50, drop_pct: 3}]   # 분할매수 (선택) — 첫 매수가 -3%에서 나머지 절반
+  scale_out: [{pct: 50, gain_pct: 3}]               # 분할익절 (선택) — 평균가 +3%에서 절반
 ```
 
-실전과 백테스트가 같은 계산(실제 매수가 기준)을 씁니다.
+실전과 백테스트(일봉)·조건식 성적표(1분봉)가 같은 계산(`exits.PositionSim`, 평균 매수가 기준)을 씁니다.
+
+계좌 단위 한도(`risk`): 종목당 매수 금액 `order_amount`(원), 신규 매수 시간대 `buy_window`, 하루 수익 목표 `daily_profit_target`·
+손실 한도 `daily_loss_limit`(원 — 닿으면 그날 신규 매수 중지 + 보유 전량 매도), 시간 일괄청산 `flatten_at`, 미체결 자동 취소
+`order_timeout_sec`. 계좌 단위 한도는 실제 계좌 흐름에서만 의미가 있어 백테스트(종목별 거래)에는 반영되지 않습니다.
 
 ## 4. 모의투자로 돌려 보기
 
@@ -153,6 +169,21 @@ ktrade status · ktrade doctor · ktrade dashboard
 ```
 
 운영·문제 해결은 [운영 가이드](docs/OPERATIONS.md). 실전 계좌(`kiwoom.is_mock: false`)는 `ktrade run --live-confirm`으로만 시작합니다.
+
+## 5. 영웅문 조건검색식 (미리보기)
+
+영웅문4 '조건검색(0150)'에서 만들어 저장한 조건식을 ktrade에서 바로 볼 수 있습니다 (조회만, 주문 없음).
+
+```bash
+ktrade hts list                       # 내 조건식 목록 (번호·이름)
+ktrade hts scan "01_오전스켈핑"        # 지금 그 조건식에 걸린 종목 — 이름 일부나 번호도 됨
+ktrade hts scan 41 --csv result.csv   # 결과를 CSV로
+```
+
+- 조건식은 키움 서버가 계산하므로 과거 백테스트는 할 수 없습니다. 다음 단계에서 장중 편입 신호를 쌓아 성적을 매기는 **신호 일지**와
+  조건식 편입 자동매매(모의)가 붙습니다.
+- 키움 웹소켓 실시간 세션은 계정당 하나라, 같은 키로 실시간 시세·조건검색을 쓰는 다른 프로그램이 떠 있으면 서로 끊길 수 있습니다.
+- 모의투자 키로도 영웅문에 저장한 조건식이 그대로 보입니다.
 
 ## 주요 설정
 
@@ -169,6 +200,9 @@ ktrade status · ktrade doctor · ktrade dashboard
 | `strategies.enabled` | 없음 | 켤 내 조건(위에 있을수록 우선), 조건별 `params`·`exits` |
 | `strategies.require_backtest` | `true` | 지금 설정으로 실험한 기록이 없는 조건은 실행 안 함 |
 | `risk.max_position_pct` / `max_concurrent_positions` | 2.0 / 5 | 종목당 비중, 동시 보유 한도 (조건 합계) |
+| `risk.order_amount` / `buy_window` | 없음 / 없음 | 종목당 매수 금액(원, 정하면 비중 대신), 신규 매수 시간대 |
+| `risk.daily_profit_target` / `daily_loss_limit` | 없음 / 없음 | 하루 수익 목표·손실 한도(원) — 닿으면 그날 매수 중지 + 전량 매도 |
+| `risk.flatten_at` / `order_timeout_sec` | 없음 / 없음 | 시간 일괄청산(예: "15:15"), 미체결 자동 취소(초) |
 
 ## 알아둘 것
 

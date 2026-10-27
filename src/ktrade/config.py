@@ -6,7 +6,7 @@
     ~/.ktrade/demo/         체험 모드용 가상 데이터 (키 없이 둘러보기, ktrade/demo.py)
     ~/.ktrade/data/         market.db (시세·매매 기록)
     ~/.ktrade/plans/        장 마감 후 만든 계획 파일 (<기준일>/<조건>.json)
-    ~/.ktrade/strategies/   내 매매조건 (조건 하나 = <id>.py 파일 하나, 또는 폴더 하나) — strategies.dirs로 다른 폴더 추가
+    ~/.ktrade/strategies/   내 매매조건 폴더들 (조건 하나 = 폴더 하나, strategy.yaml + strategy.py)
     ~/.ktrade/experiments/  백테스트 실험 기록 (조건을 바꿀 때마다 쌓이고 비교된다)
 
 역할: 매매조건(종목 선정·매수 타이밍)은 사용자, 손절·이익실현·보유기간(exits)·실행·백테스트는 엔진.
@@ -32,6 +32,8 @@ DEFAULTS: dict = {
         "max_hold_days": 10,
         "stop_check": "close",
         "stop_check_after": "15:10",
+        "scale_in": [],                # 분할매수 [{pct: 50}, {pct: 50, drop_pct: 3}] — 비면 한 번에
+        "scale_out": [],               # 분할익절 [{pct: 50, gain_pct: 3}] — 비면 목표가·추적 손절로 한 번에
     },
     "backtest": {"start": None, "end": None, "years": 3,   # 기간: start~end, 비면 DB 마지막 거래일부터 years년
                  "symbols": [], "symbols_file": None,          # 대상 종목: 비면 DB에 있는 전 종목
@@ -43,13 +45,20 @@ DEFAULTS: dict = {
         "order_slippage_pct": 0.5,         # 주문 지정가 = 현재가 ± 이 % (체결 보장용 범위)
         "max_new_orders_per_day": 10,      # 하루 신규 매수 주문 한도 (조건 전체 합)
         "max_plans_per_strategy": 20,      # 조건 하나가 하루에 낼 수 있는 계획 수 한도
+        "order_amount": None,              # 종목당 매수 금액(원). 정하면 max_position_pct 대신 이 금액
+        "buy_window": None,                # 신규 매수 시간대 ["09:00", "14:30"] (None = 계획·조건식 설정대로)
+        "daily_profit_target": None,       # 하루 수익 목표(원) — 닿으면 그날 신규 매수 중지 + 보유 전량 매도
+        "daily_loss_limit": None,          # 하루 손실 한도(원, 양수로) — 닿으면 그날 신규 매수 중지 + 보유 전량 매도
+        "flatten_at": None,                # 시간 일괄청산 "15:15" — 이 시각 이후 보유 전량 매도 (단타용)
+        "order_timeout_sec": None,         # 미체결 자동 취소(초) — 지나면 남은 수량 취소 (None = 다음 거래일까지 기다림)
     },
     "strategies": {
-        "dirs": [],                        # 추가로 조건을 찾을 폴더 (첫 폴더에 ktrade new가 만듦, ${ENV} 사용 가능)
+        "dirs": [],                        # 추가로 조건을 찾을 폴더 (KTRADE_HOME/strategies는 항상 포함)
         "enabled": [],                     # [{id: example_breakout, params: {...}, exits: {...}}] — 위에 있을수록 우선
         "require_backtest": True,          # 지금 설정으로 백테스트한 기록이 없는 조건은 계획을 만들지 않음
     },
     "external_plans": [],                  # [{id: my_strategy, dir: "C:/.../plans", use_engine_exits: false}]
+    "hts_conditions": [],                  # 영웅문 조건식 (장중 실시간 편입 신호) — 형식은 engine/signals.py DEFAULT_COND
     "collect": {                                            # 키움에서 받아 DB에 쌓을 범위 (사용자가 정함)
         "symbols": [], "symbols_file": None,                   # 종목 직접 지정. 비면 market_names 시장 전체
         "market_names": ["거래소", "코스닥"],                  # ETF도 쓰려면 "ETF" 추가
@@ -79,6 +88,8 @@ exits:
   trailing: {activate_pct: null, trail_pct: null}   # 예: {activate_pct: 5, trail_pct: 4} = +5% 이후 최고가에서 -4%면 매도
   max_hold_days: 10
   stop_check: close                    # close = 15:10 이후에만 손절 판단(장중 흔들림 무시) | intraday = 닿는 즉시
+  scale_in: []                         # 분할매수 예: [{pct: 50}, {pct: 50, drop_pct: 3}] = 절반 산 뒤 첫 매수가 -3%에서 나머지
+  scale_out: []                        # 분할익절 예: [{pct: 50, gain_pct: 3}] = 평균가 +3%에서 절반, 나머지는 목표가·추적 손절
 
 # 백테스트 = 내 매매조건 + DB(아래 collect로 받은 데이터). 명령 옵션(--start --end --symbols)이 있으면 그게 우선
 backtest:
@@ -97,9 +108,16 @@ risk:
   order_slippage_pct: 0.5
   max_new_orders_per_day: 10
   max_plans_per_strategy: 20
+  order_amount: null            # 종목당 매수 금액(원). 예: 1000000 — 정하면 max_position_pct 대신
+  buy_window: null              # 신규 매수 시간대. 예: ["09:00", "14:30"]
+  daily_profit_target: null     # 하루 수익 목표(원). 닿으면 그날 매수 중지 + 보유 전량 매도
+  daily_loss_limit: null        # 하루 손실 한도(원). 예: 300000 — 닿으면 그날 매수 중지 + 보유 전량 매도
+  flatten_at: null              # 시간 일괄청산. 예: "15:15" — 이 시각 이후 보유 전량 매도 (단타)
+  order_timeout_sec: null       # 미체결 자동 취소(초). 예: 30 — 지나면 남은 수량 취소
+  # 하루 손익 한도·시간 일괄청산은 계좌 단위라 백테스트(종목별 거래)에는 반영되지 않습니다.
 
 strategies:
-  dirs: []                      # 내 매매조건 폴더 (첫 폴더에 ktrade new가 만듦). 예: ["D:/trading/my-conditions"], ["${DEV_ROOT}/conditions"]
+  dirs: []
   require_backtest: true        # 백테스트 안 한 설정의 조건은 실행하지 않음 (조건을 바꾸면 ktrade test <id>)
   enabled: []                   # 실행할 내 매매조건 (위에 있을수록 우선). 예:
   #  - id: my_condition
@@ -108,6 +126,19 @@ strategies:
 
 # 파이썬이 아닌 프로그램이 계획 파일(schema 1)을 만드는 경우 그 폴더를 적는다 (docs/PLAN_SCHEMA.md)
 external_plans: []
+
+# 영웅문4 '조건검색(0150)'에서 만든 조건식을 장중 실시간 신호로 (ktrade hts list 로 이름 확인, ktrade hts watch 로 관찰)
+# 지금은 관찰(watch)만 — 편입·이탈과 '샀다면' 판단을 신호 일지에 남기고 주문은 하지 않는다 (ktrade hts signals)
+hts_conditions: []
+#  - name: "01_오전스켈핑"       # 조건식 이름 (일부만 적어도 하나로 정해지면 됨)
+#    mode: watch
+#    buy_window: ["09:00", "10:30"]
+#    price_range: [1000, 50000]
+#    chase_pct: 1.0             # 편입가 대비 이만큼 넘게 오르면 안 삼
+#    confirm_sec: 0             # 0 = 편입 즉시 / 30 = 30초 동안 이탈 없고 편입가 이상일 때
+#    max_buys_per_day: 3
+#    reentry: false
+#    exit_on_remove: false      # 조건 이탈에 매도 (매도 조건식 역할)
 
 # 키움에서 받아 DB에 쌓을 범위 — ktrade collect / daily 가 이대로 받는다 (받아 둔 범위 확인: ktrade data)
 collect:
@@ -137,6 +168,35 @@ def _merge(base: dict, over: dict) -> dict:
     for k, v in (over or {}).items():
         out[k] = _merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
     return out
+
+
+def update_sections(updates: dict, path: Path | None = None) -> Path:
+    """config.yaml의 최상위 항목 몇 개만 바꿔 쓴다 (운영 화면 저장). 나머지 줄·주석은 그대로, 바꾸기 전 파일은 config.yaml.bak.
+    항목 블록 = 'key:' 줄부터 들여쓴 줄·빈 줄이 이어지는 데까지(뒤쪽 빈 줄은 남김). 없던 항목은 끝에 붙인다."""
+    p = path or home() / "config.yaml"
+    old = p.read_text(encoding="utf-8") if p.exists() else TEMPLATE
+    lines = old.splitlines(keepends=True)
+    for key, value in updates.items():
+        block = yaml.safe_dump({key: value}, allow_unicode=True, sort_keys=False, default_flow_style=None, width=120)
+        start = next((i for i, ln in enumerate(lines) if ln.startswith(f"{key}:")), None)
+        if start is None:
+            if lines and not lines[-1].endswith("\n"):
+                lines[-1] += "\n"
+            lines.append(block)
+            continue
+        end = start + 1
+        while end < len(lines) and (lines[end][:1] in (" ", "\t") or not lines[end].strip()):
+            end += 1
+        while end > start + 1 and not lines[end - 1].strip():
+            end -= 1
+        lines[start:end] = [block]
+    text = "".join(lines)
+    yaml.safe_load(text)                                                # 깨진 YAML이면 쓰기 전에 예외
+    if p.exists():
+        p.with_suffix(".yaml.bak").write_text(old, encoding="utf-8")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+    return p
 
 
 def load(path: Path | None = None) -> dict:

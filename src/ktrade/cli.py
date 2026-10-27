@@ -1,7 +1,7 @@
 """ktrade 명령 — 매매조건 실험 엔진.
 
   매매조건 만들기·실험 (조건을 바꾸거나 더할 때마다)
-    ktrade new <id>                  내 매매조건 뼈대 (<id>.py 파일 하나, strategies.dirs 첫 폴더 또는 ~/.ktrade/strategies)
+    ktrade new <id>                  내 매매조건 뼈대 (~/.ktrade/strategies/<id>) — 종목 선정 + 매수 타이밍만 작성
     ktrade test <id>                 검사 + 백테스트 + 이전 실험과 비교 (한 번에)
     ktrade validate <id> [--asof]    검사만 (형식·금지 사항·실행 결과·엔진 검사)
     ktrade backtest <id> [--start --end] [--symbols …] [--exits JSON] [--params JSON]   백테스트만
@@ -17,6 +17,14 @@
     ktrade data [--symbols … | --all]   DB에 받아 둔 범위 (종목 수·기간·분봉)
     ktrade import-db <경로>             다른 SQLite DB에서 가져오기
 
+  영웅문 조건검색식 (영웅문4 '조건검색 0150'에서 만든 조건식 — 키움 서버가 계산, 주문 없음)
+    ktrade hts list                    조건식 목록 (번호·이름)
+    ktrade hts scan "<이름|번호>" [--csv 파일] [--limit N]   지금 그 조건식에 걸린 종목
+    ktrade hts watch ["<이름>" …] [--until HH:MM]   장중 실시간 편입·이탈 → 신호 일지. config에서 mode: trade인 조건식은 매매
+                                       (paper·키움 모의만 — 실전은 아직 막힘), 손절·익절·당일 청산은 엔진 규칙
+    ktrade hts signals [--date YYYY-MM-DD] [--cond 이름]   신호 일지 요약
+    ktrade hts report [--date | --days N] [--cond 이름] [--collect]   성적표: 신호마다 '그때 샀다면'(1분봉, 엔진 청산) + 실제 매매
+
   운영
     ktrade login [--real] | logout     키움 앱키 입력·삭제 (대시보드 로그인 화면과 같음, OS 자격 증명 저장소에 보관)
     ktrade init | daily | plan [--asof] | run [--once] [--live-confirm]
@@ -30,7 +38,7 @@ import argparse
 import json
 import logging
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from ktrade import __version__
@@ -42,14 +50,14 @@ _TEMPLATE = '''"""{id} — 내 매매조건.
 여기서 정하는 것은 두 가지뿐:
   1) 종목 선정: 기준일(ctx.asof) 장 마감 기준으로 어떤 종목을 고를지
   2) 매수 타이밍: 다음 거래일에 어떤 가격 조건에서 살지 (Entry.confirm / Entry.at_open / Entry.pullback)
-손절·이익실현·보유기간은 엔진이 정한다 (config.yaml exits, 이 조건만 바꾸려면 아래 클래스의 exits).
+손절·이익실현·보유기간은 엔진이 정한다 (config.yaml 또는 strategy.yaml의 exits).
 바꿀 때마다: ktrade test {id}
 """
 from ktrade.sdk import Condition, Context, Entry, Pick
 
 
 class MyCondition(Condition):
-{header}    default_params = {{"lookback": 20, "min_price": 2000, "min_avg_value": 5e8, "max_plans": 5}}
+    default_params = {{"lookback": 20, "min_price": 2000, "min_avg_value": 5e8, "max_plans": 5}}
 
     def select(self, ctx: Context) -> list[Pick]:
         p = self.params
@@ -94,9 +102,7 @@ params: {{}}          # 기본값은 strategy.py의 default_params. 여기나 co
 
 _STRATEGIES_README = """# 내 매매조건 폴더
 
-매매조건 하나 = 이 아래 파일 하나 (my_condition.py, 파일 이름 = 조건 id).
-예전 방식인 폴더 하나(my_condition/strategy.yaml + strategy.py)도 읽습니다 (ktrade new --folder).
-다른 폴더(예: git으로 관리하는 폴더)에 두려면 config.yaml strategies.dirs에 적으세요 — ktrade new도 그곳에 만듭니다.
+매매조건 하나 = 이 아래 폴더 하나 (폴더 이름 = 조건 id). 안에 strategy.yaml + strategy.py.
 작성하는 것: 종목 선정 + 매수 타이밍. 손절·이익실현·보유기간·실행·백테스트는 엔진이 한다.
 
     ktrade new my_condition         # 뼈대 만들기
@@ -213,36 +219,14 @@ def cmd_strategies(a) -> None:
         print(f"!! 무시한 폴더 {folder}\n     {why}")
 
 
-_SINGLE_HEADER = """    version = "v1"                      # 조건을 크게 바꾸면 올린다 (실험 기록에 남음)
-    description = "내 매매조건 설명"
-    # 손절·익절을 이 조건만 다르게 하려면 (없으면 config.yaml exits):
-    # exits = {"stop": {"type": "pct", "value": 5}, "take_profit": {"type": "r", "value": 2}, "max_hold_days": 10}
-"""
-
-
 def cmd_new(a) -> None:
-    """기본은 파일 하나(<id>.py), --folder면 예전 방식(폴더 + strategy.yaml). 위치는 strategies.dirs 첫 폴더."""
-    from ktrade.engine import loader
-    cfg = _cfg()
-    found = loader.discover(cfg)
-    if a.id in found:
-        sys.exit(f"이미 같은 이름의 매매조건이 있습니다: {found[a.id].source}")
-    base = loader.new_dir(cfg)
-    base.mkdir(parents=True, exist_ok=True)
-    if a.folder:
-        target, edit = base / a.id, "strategy.py"
-        if target.exists():
-            sys.exit(f"이미 있습니다: {target}")
-        target.mkdir()
-        (target / "strategy.yaml").write_text(_MANIFEST.format(id=a.id), encoding="utf-8")
-        (target / "strategy.py").write_text(_TEMPLATE.format(id=a.id, header=""), encoding="utf-8")
-    else:
-        target = base / f"{a.id}.py"
-        edit = target.name
-        if target.exists():
-            sys.exit(f"이미 있습니다: {target}")
-        target.write_text(_TEMPLATE.format(id=a.id, header=_SINGLE_HEADER), encoding="utf-8")
-    print(f"만들었습니다: {target}\n  1) {edit} 에서 '종목 선정'과 '매수 타이밍' 두 곳을 고치고\n"
+    d = paths(_cfg())["strategies"] / a.id
+    if d.exists():
+        sys.exit(f"이미 있습니다: {d}")
+    d.mkdir(parents=True)
+    (d / "strategy.yaml").write_text(_MANIFEST.format(id=a.id), encoding="utf-8")
+    (d / "strategy.py").write_text(_TEMPLATE.format(id=a.id), encoding="utf-8")
+    print(f"만들었습니다: {d}\n  1) strategy.py 에서 '종목 선정'과 '매수 타이밍' 두 곳을 고치고\n"
           f"  2) ktrade test {a.id}\n  3) config.yaml strategies.enabled 에 '- id: {a.id}' 추가")
 
 
@@ -472,6 +456,257 @@ def cmd_data(a) -> None:
         print("종목별 범위: ktrade data --all  또는  ktrade data --symbols 005930,000660")
 
 
+def cmd_hts(a) -> None:
+    import pandas as pd
+    from ktrade.data.hts import HtsClient, HtsError
+    cfg = _cfg()
+    server = "모의투자" if cfg["kiwoom"].get("is_mock", True) else "실전"
+    if a.action == "watch":
+        return _hts_watch(a, cfg, server)
+    if a.action == "signals":
+        from ktrade.data.store import Store
+        return _hts_summary(Store(paths(cfg)["db"]), a.date or date.today().isoformat(), a.cond, rows=a.limit)
+    if a.action == "report":
+        return _hts_report(a, cfg)
+    client = HtsClient(cfg)
+    try:
+        if a.action == "list":
+            conds = client.list()
+            if not conds:
+                print(f"조건식이 없습니다 ({server} 서버) — 영웅문4 '조건검색(0150)'에서 만들고 저장하세요.")
+                return
+            print(f"영웅문 조건식 {len(conds)}개 ({server} 서버)")
+            for c in conds:
+                print(f"  {c.seq:>3}  {c.name}")
+            print('\n지금 걸린 종목 보기: ktrade hts scan "<이름 또는 번호>"')
+            return
+        if not a.names:
+            sys.exit('조건식 이름이나 번호를 주세요 — 예: ktrade hts scan "01_오전스켈핑"  (목록: ktrade hts list)')
+        cond, df = client.scan(a.names[0])
+    except HtsError as exc:
+        sys.exit(str(exc))
+    print(f"[{cond.seq}] {cond.name} — {len(df)}종목 ({server} 서버, {datetime.now():%Y-%m-%d %H:%M} 기준, 주문 없음)")
+    if df.empty:
+        return
+    if a.csv:
+        df.to_csv(a.csv, index=False, encoding="utf-8-sig")
+        print(f"CSV 저장: {a.csv}")
+    show = df.head(a.limit).copy()
+    show["rate"] = show["rate"].map(lambda v: "" if pd.isna(v) else f"{v:+.2f}%")
+    for c in ("price", "volume"):
+        show[c] = show[c].map(lambda v: "" if pd.isna(v) else f"{v:,.0f}")
+    show = show[["code", "name", "price", "rate", "volume", "kind"]].rename(
+        columns={"code": "종목", "name": "이름", "price": "현재가", "rate": "등락률", "volume": "거래량", "kind": "구분"})
+    with pd.option_context("display.max_rows", None, "display.width", 160, "display.unicode.east_asian_width", True):
+        print(show.to_string(index=False))
+    if len(df) > a.limit:
+        print(f"… 외 {len(df) - a.limit}종목 (--limit 또는 --csv)")
+
+
+_ACTION_KO = {"INIT": "등록 시 편입", "WAIT": "확인 대기", "WOULD_BUY": "매수 신호", "SKIP": "건너뜀", "CONFIRM_FAIL": "확인 탈락",
+              "REMOVE": "이탈", "WOULD_SELL": "이탈 매도 신호", "BUY": "매수", "SELL": "이탈 매도"}
+
+
+def _hts_trade_allowed(cfg: dict) -> tuple[bool, str]:
+    """조건식 매매를 실제로 주문해도 되는지 — paper(가상 체결)·키움 모의투자만. 실전은 성적 기준(다음 단계) 전까지 막는다."""
+    if cfg.get("broker", "paper") == "paper":
+        return True, "paper(가상 체결)"
+    if cfg["kiwoom"].get("is_mock", True):
+        return True, "키움 모의투자"
+    return False, "실전 계좌는 조건식 성적 기준이 생기기 전까지 막혀 있음"
+
+
+def _hts_report(a, cfg: dict) -> None:
+    import pandas as pd
+    from ktrade.data.store import Store
+    from ktrade.engine import forward
+    store = Store(paths(cfg)["db"])
+    days = forward.signal_dates(store, a.date, a.days)
+    if not days:
+        sys.exit("신호 일지가 없습니다 (장중에 ktrade hts watch)")
+    if a.collect:
+        n = forward.collect_minutes(store, cfg, days)
+        print(f"1분봉 받음: {n}종목·일")
+    rep = forward.report(store, cfg, days, a.cond)
+    print(forward.render(rep))
+
+
+def _hts_watch(a, cfg: dict, server: str) -> None:
+    """장중 관찰: 조건식 실시간 등록 → 편입·이탈마다 SignalBook 판단 → 신호 일지. 주문 모듈(broker)은 불러오지도 않는다."""
+    import time
+    from ktrade.data.store import Store
+    from ktrade.data.stream import ConditionStream
+    from ktrade.engine.executor import halt_state
+    from ktrade.engine.live import stop_requested
+    from ktrade.engine.signals import SignalBook, load_conditions
+    conds = load_conditions(cfg, a.names or None)
+    if not conds:
+        sys.exit('관찰할 조건식을 주세요 — ktrade hts watch "01_오전스켈핑"  또는 config.yaml hts_conditions (목록: ktrade hts list)')
+    if not cfg["_secrets"].get("app_key"):
+        sys.exit("키움 앱키가 없습니다 — 대시보드 로그인 화면 또는 ktrade login")
+    store = Store(paths(cfg)["db"])
+    rest_cache: dict[str, tuple[float, float]] = {}
+    rest = None
+    trade_conds = [c["name"] for c in conds if c.get("mode") == "trade"]
+    allow, how = _hts_trade_allowed(cfg)
+    executor = None
+    if trade_conds and allow:
+        from ktrade.broker import build as build_broker
+        from ktrade.engine.executor import Executor
+        from ktrade.engine.risk import Risk
+        broker = build_broker(cfg, store)
+        executor = Executor(store, broker, Risk.from_config(cfg, broker.total_deposit()),
+                            lambda s: {"price": price(s), "open": price(s)} if price(s) else {})
+
+    def price(sym: str) -> float | None:
+        nonlocal rest
+        p = stream.price(sym)
+        if p:
+            return p
+        hit = rest_cache.get(sym)
+        if hit and time.monotonic() - hit[1] < 3:
+            return hit[0]
+        try:
+            if rest is None:
+                from ktrade.data.kiwoom import KiwoomData
+                rest = KiwoomData(cfg)
+            q = rest.quote(sym) or {}
+        except Exception:
+            return hit[0] if hit else None
+        if q.get("price"):
+            rest_cache[sym] = (float(q["price"]), time.monotonic())
+            return float(q["price"])
+        return None
+
+    until = a.until or cfg["live"].get("market_close", "15:30")
+    names = [c["name"] for c in conds]
+    trading = f"매매: {', '.join(trade_conds)} ({how})" if executor else (
+        f"매매 설정 {', '.join(trade_conds)} — 관찰로 동작 ({how})" if trade_conds else "주문 없음")
+    print(f"조건식 실시간 ({server} 서버) — {', '.join(names)} · {until}까지 (Ctrl+C로 끝) · {trading}")
+    print("  같은 키로 실시간 시세·조건검색을 쓰는 다른 프로그램이 켜져 있으면 서로 끊깁니다(계정당 웹소켓 하나).")
+    stream = ConditionStream(cfg, names).start()
+    book = SignalBook(store, conds, price, executor=executor, allow_trade=executor is not None, no_trade_reason=how)
+    started = datetime.now()
+    last_check: dict[str, float] = {}
+    last_guard = 0.0
+
+    printed: dict[tuple, float] = {}
+
+    def show(d: dict) -> None:
+        # 같은 종목이 몇 초마다 편입·이탈을 되풀이하면 같은 줄이 수천 번 찍힌다 → 같은 (조건식·종목·판단·사유)는 10분에 한 번만
+        if d["action"] in ("SKIP", "REMOVE", "WAIT", "CONFIRM_FAIL"):
+            key = (d["cond"], d["symbol"], d["action"], (d.get("reason") or "").split(" (")[0])
+            if time.monotonic() - printed.get(key, -1e9) < 600:
+                return
+            printed[key] = time.monotonic()
+        pr = f" {d['price']:,.0f}원" if d.get("price") else ""
+        print(f"{datetime.now():%H:%M:%S} [{d['cond']}] {d['event']} {d['symbol']}{pr} → {_ACTION_KO.get(d['action'], d['action'])}"
+              + (f" — {d['reason']}" if d.get("reason") and d["action"] != "INIT" else ""), flush=True)
+    try:
+        while datetime.now().strftime("%H:%M") < until:
+            now = datetime.now()
+            while True:
+                try:
+                    ev = stream.events.get_nowait()
+                except Exception:
+                    break
+                if ev.kind in ("status", "error", "registered"):
+                    tag = {"status": "상태", "error": "오류", "registered": "등록"}[ev.kind]
+                    print(f"{now:%H:%M:%S} ({tag}) {('[' + ev.cond + '] ') if ev.cond else ''}{ev.detail}", flush=True)
+                    store.log_decision("hts:" + (ev.cond or "-"), "-", "HTS_" + ev.kind.upper(), "NONE", ev.detail,
+                                       now.isoformat(timespec="seconds"))
+                    continue
+                if ev.kind == "insert":
+                    stream.watch_price(ev.symbol)
+                for d in book.handle(ev, now):
+                    if d["action"] != "INIT" or a.verbose:
+                        show(d)
+            for d in book.tick(now):
+                show(d)
+            if time.monotonic() - last_guard >= 5:
+                last_guard = time.monotonic()
+                store.set_setting("hts.heartbeat", {"ts": now.isoformat(timespec="seconds"), "conds": names,
+                                                    "registered": list(getattr(stream, "registered", [])), "restarts": getattr(stream, "restarts", 0),
+                                                    "trade": executor is not None, "until": until})
+                if stop_requested(store, "hts", started):
+                    print(f"{now:%H:%M:%S} 화면에서 중지 요청 — 끝냅니다", flush=True)
+                    break
+                if executor is not None:       # 하루 손익 한도 → 정지(+전량 매도)
+                    halted = halt_state(store, now.strftime("%Y-%m-%d"))
+                    executor.guard(now)
+                    h = halt_state(store, now.strftime("%Y-%m-%d"))
+                    if h and not halted:
+                        print(f"{now:%H:%M:%S} 계좌 정지 — {h.get('reason')}", flush=True)
+            if executor is not None:           # 보유 종목 손절·익절·분할·당일 청산 (종목마다 2초에 한 번)
+                for sym in executor.symbols():
+                    if time.monotonic() - last_check.get(sym, 0) < 2:
+                        continue
+                    last_check[sym] = time.monotonic()
+                    before = store.active_plan_trade(sym)
+                    try:
+                        executor.check(sym, now)
+                    except Exception as exc:
+                        print(f"{now:%H:%M:%S} [{sym}] 실행 오류: {exc}", flush=True)
+                        continue
+                    if before is not None:
+                        _print_fills(store, before, now)
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        print("\n중지")
+    finally:
+        stream.stop()
+    print(f"\n관찰 {started:%H:%M}~{datetime.now():%H:%M}, 재연결 {stream.restarts}번")
+    _hts_summary(store, date.today().isoformat(), None, rows=0)
+    if executor is not None:
+        held = [s for s in store.active_plan_symbols() if (store.active_plan_trade(s) or {}).get("strategy", "").startswith("hts:")]
+        if held:
+            print(f"! 아직 보유 중 {len(held)}종목 ({', '.join(held)}) — 다음 ktrade hts watch / ktrade run 때 손절·익절·청산 규칙으로 계속 관리")
+
+
+def _print_fills(store, before: dict, now) -> None:
+    """한 번의 확인 사이에 새로 기록된 매수 차수·매도를 찍는다."""
+    from ktrade.engine.executor import book
+    t = store.query("SELECT * FROM plan_trades WHERE id = ?", (int(before["id"]),)).iloc[0].to_dict()
+    f0, s0, _ = book(before)
+    f1, s1, _ = book(t)
+    name = str(t["strategy"]).removeprefix("hts:")
+    for f in f1[len(f0):]:
+        if f["qty"] > 0 and f["step"] > 0:
+            print(f"{now:%H:%M:%S} [{name}] {f['step'] + 1}차 분할매수 {t['symbol']} {f['qty']}주 {f['price']:,.0f}원 "
+                  f"(평균 {t['entry_price']:,.0f}원)", flush=True)
+    for s in s1[len(s0):]:
+        if s["qty"] > 0:
+            ret = (s["price"] / t["entry_price"] - 1) * 100 if t["entry_price"] else 0
+            print(f"{now:%H:%M:%S} [{name}] 매도 {t['symbol']} {s['qty']}주 {s['price']:,.0f}원 ({ret:+.2f}%) — {s['reason']}",
+                  flush=True)
+
+
+def _hts_summary(store, day: str, cond: str | None, rows: int = 30) -> None:
+    df = store.signals(day, cond)
+    if df.empty:
+        print(f"{day} 신호 일지가 비어 있습니다 (장중에 ktrade hts watch)")
+        return
+    from ktrade.engine.forward import EPISODE_GAP_MIN, episodes
+    print(f"[신호 일지 {day}]" + (f" {cond}" if cond else ""))
+    for name, g in df.groupby("cond_name", sort=False):
+        eps = episodes(g, EPISODE_GAP_MIN)
+        if len(eps):
+            print(f"  {name}: 편입 {eps['symbol'].nunique()}종목 · 편입 묶음 {len(eps)}번 (원자료 편입 이벤트 {int(eps['n_inserts'].sum())}번)")
+        cnt = g["action"].value_counts()
+        parts = [f"{_ACTION_KO.get(k, k)} {cnt[k]}" for k in ("INIT", "WOULD_BUY", "SKIP", "CONFIRM_FAIL", "REMOVE", "WOULD_SELL", "WAIT")
+                 if k in cnt]
+        print(f"    판단: " + " · ".join(parts))
+        skips = g[g["action"].isin(["SKIP", "CONFIRM_FAIL"])]["reason"].str.replace(r"\s*\(.*$", "", regex=True).value_counts().head(4)
+        if len(skips):
+            print("    건너뛴 이유: " + ", ".join(f"{r} {n}" for r, n in skips.items()))
+    if rows:
+        last = df[df["action"] != "INIT"].tail(rows)
+        for r in last.itertuples():
+            pr = f" {r.price:,.0f}원" if r.price == r.price and r.price else ""
+            print(f"  {r.ts[11:19]} [{r.cond_name}] {r.event} {r.symbol}{pr} → {_ACTION_KO.get(r.action, r.action)}"
+                  + (f" — {r.reason}" if r.reason else ""))
+
+
 def cmd_import_db(a) -> None:
     from ktrade.data.importer import import_db
     from ktrade.data.store import Store
@@ -659,9 +894,7 @@ def main(argv: list[str] | None = None) -> None:
         (("--no-check",), {"action": "store_true", "help": "키움 연결 확인 없이 저장"}))
     add("logout", cmd_logout)
     add("strategies", cmd_strategies, aliases=("conditions",))
-    add("new", cmd_new, (("id",), {}),
-        (("--folder",), {"action": "store_true", "help": "파일 하나 대신 폴더(strategy.yaml + strategy.py)로 만들기"}),
-        aliases=("new-condition", "new-strategy"))
+    add("new", cmd_new, (("id",), {}), aliases=("new-condition", "new-strategy"))
     add("validate", cmd_validate, (("id",), {}), (("--asof",), {}), (("--params",), {}))
     add("test", cmd_test, (("id",), {}), *bt_args)
     add("backtest", cmd_backtest, (("id",), {}), *bt_args)
@@ -674,6 +907,13 @@ def main(argv: list[str] | None = None) -> None:
         (("--minute-symbols",), {"help": "1분봉도 받을 종목 (쉼표 구분)"}), (("--minute-start",), {}),
         (("--limit",), {"type": int}), (("--dry-run",), {"action": "store_true", "help": "범위만 보여 주고 받지 않음"}))
     add("data", cmd_data, (("--symbols",), {}), (("--all",), {"action": "store_true"}))
+    add("hts", cmd_hts, (("action",), {"choices": ["list", "scan", "watch", "signals", "report"]}),
+        (("names",), {"nargs": "*", "help": "조건식 이름 또는 번호 (scan: 하나, watch: 여러 개)"}),
+        (("--csv",), {"help": "검색 결과를 CSV로 저장"}), (("--limit",), {"type": int, "default": 50, "help": "화면에 보일 줄 수"}),
+        (("--until",), {"help": "watch를 끝낼 시각 HH:MM (기본 장 마감)"}), (("--date",), {"help": "signals 날짜 (기본 오늘)"}),
+        (("--cond",), {"help": "signals·report: 이 조건식만"}), (("--verbose",), {"action": "store_true", "help": "watch: 등록 시점 편입 종목도 표시"}),
+        (("--days",), {"type": int, "help": "report: 최근 N일 (신호가 있는 날 기준)"}),
+        (("--collect",), {"action": "store_true", "help": "report: 신호 종목 1분봉을 키움에서 받아 계산"}))
     add("import-db", cmd_import_db, (("path",), {}), (("--since",), {}), (("--minute-days",), {"type": int, "default": 0}))
     add("plan", cmd_plan, (("--asof",), {}), (("--only",), {"nargs": "*"}))
     add("daily", cmd_daily, (("--no-collect",), {"action": "store_true"}), (("--no-minute",), {"action": "store_true"}),

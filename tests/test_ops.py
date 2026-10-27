@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import platform
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
@@ -64,7 +65,7 @@ def test_dashboard_renders(market, cfg):
     from streamlit.testing.v1 import AppTest
     store, days = market
     planner.run_plans(cfg, store, days[59])
-    import ktrade.dashboard.app as mod
-    at = AppTest.from_file(mod.__file__, default_timeout=60).run()
+    import ktrade.dashboard as dash                   # app.py를 import하면 스크립트가 bare 모드로 한 번 돌아 버린다 — 경로만
+    at = AppTest.from_file(str(Path(dash.__file__).parent / "app.py"), default_timeout=60).run()
     assert not at.exception, [e.value for e in at.exception]
     assert any("AAA001" in str(df.value.to_dict()) for df in at.dataframe)

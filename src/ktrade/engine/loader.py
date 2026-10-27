@@ -1,27 +1,22 @@
 """매매조건 찾기·불러오기.
 
-매매조건 하나 = 파일 하나 (기본, ktrade new):
-    my_condition.py   ktrade.sdk.Condition 상속 클래스 하나. 파일 이름 = 조건 id.
-                      version·description·default_params·exits는 클래스 속성 (실행하지 않고 AST로 읽음)
-또는 폴더 하나 (params를 yaml로 따로 두고 싶을 때, ktrade new --folder):
+매매조건 하나 = 폴더 하나:
     my_condition/
       strategy.yaml   id, version, entry("strategy.py:클래스"), description, author, params, exits(선택 — 손절·익절 덮어쓰기)
       strategy.py     ktrade.sdk.Condition 상속 클래스 (종목 선정 + 매수 타이밍만)
 
-찾는 곳 (앞이 우선): KTRADE_HOME/strategies → config strategies.dirs(환경변수 ${DEV_ROOT} 등 사용 가능) → 동봉 예제
-→ pip 패키지 entry point ("ktrade.strategies" 그룹). code_hash = 조건 파일(폴더면 안의 .py·.yaml) 내용의 지문 — 백테스트 기록과 짝지어
+찾는 곳 (앞이 우선): KTRADE_HOME/strategies → config strategies.dirs → 동봉 예제 → pip 패키지 entry point
+("ktrade.strategies" 그룹). code_hash = 폴더 안 .py·.yaml 내용의 지문 — 백테스트 기록과 짝지어
 '조건을 바꿨는데 아직 백테스트 안 함'을 알아낸다 (engine/experiments.py).
 
 주의: strategy.py는 일반 파이썬 코드라 무엇이든 할 수 있다. 믿을 수 있는 조건만 넣는다(ktrade validate가 금지 import를 잡지만 샌드박스는 아님).
 """
 from __future__ import annotations
 
-import ast
 import hashlib
 import importlib.metadata
 import importlib.util
 import inspect
-import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -55,19 +50,8 @@ def bundled_dir() -> Path | None:
     return None
 
 
-def user_dirs(cfg: dict) -> list[Path]:
-    """config strategies.dirs — ~ 와 환경변수(${DEV_ROOT}, %DEV_ROOT%)를 풀어서."""
-    return [Path(os.path.expandvars(str(d))).expanduser() for d in cfg["strategies"].get("dirs") or []]
-
-
-def new_dir(cfg: dict) -> Path:
-    """ktrade new가 만드는 곳: strategies.dirs의 첫 폴더, 없으면 KTRADE_HOME/strategies."""
-    dirs = user_dirs(cfg)
-    return dirs[0] if dirs else paths(cfg)["strategies"]
-
-
 def search_dirs(cfg: dict) -> list[Path]:
-    dirs = [paths(cfg)["strategies"]] + user_dirs(cfg)
+    dirs = [paths(cfg)["strategies"]] + [Path(d).expanduser() for d in cfg["strategies"].get("dirs", [])]
     b = bundled_dir()
     if b:
         dirs.append(b)
@@ -82,45 +66,6 @@ def folder_hash(folder: Path) -> str:
         h.update(f.relative_to(folder).as_posix().encode())
         h.update(f.read_bytes().replace(b"\r\n", b"\n"))
     return h.hexdigest()[:12]
-
-
-def file_hash(path: Path) -> str:
-    h = hashlib.sha256(path.name.encode())
-    h.update(path.read_bytes().replace(b"\r\n", b"\n"))
-    return h.hexdigest()[:12]
-
-
-def _from_file(path: Path) -> StrategyInfo | None:
-    """파일 하나짜리 조건 — Condition을 상속한 클래스의 속성을 실행하지 않고 읽는다 (리터럴만)."""
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    classes = [n for n in tree.body if isinstance(n, ast.ClassDef)
-               and any((b.id if isinstance(b, ast.Name) else getattr(b, "attr", "")) == "Condition" for b in n.bases)]
-    if not classes:
-        return None
-    if len(classes) > 1:
-        raise ValueError(f"{path.name}: Condition 상속 클래스는 파일당 하나만 ({', '.join(c.name for c in classes)})")
-    cls = classes[0]
-    attrs: dict = {}
-    for node in cls.body:
-        if isinstance(node, (ast.Assign, ast.AnnAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            for t in targets:
-                if isinstance(t, ast.Name) and t.id in ("version", "description", "author", "exits") and node.value:
-                    try:
-                        attrs[t.id] = ast.literal_eval(node.value)
-                    except ValueError:
-                        raise ValueError(f"{path.name}: {cls.name}.{t.id}는 값을 그대로 적어야 합니다 (계산식 불가)") from None
-    doc = (ast.get_docstring(tree) or "").strip().splitlines()
-    return StrategyInfo(id=path.stem, version=str(attrs.get("version", "v1")),
-                        description=attrs.get("description") or (doc[0] if doc else ""),
-                        author=attrs.get("author", ""), source=str(path), params={}, entry=f"{path.name}:{cls.name}",
-                        exits=attrs.get("exits") or {}, code_hash=file_hash(path))
-
-
-def entry_file(info: StrategyInfo) -> Path:
-    """조건 코드 파일 경로 (파일 하나짜리면 source 자체, 폴더면 source/entry 파일)."""
-    src = Path(info.source)
-    return src if src.suffix == ".py" else src / info.entry.partition(":")[0]
 
 
 def _from_folder(folder: Path) -> StrategyInfo | None:
@@ -147,10 +92,9 @@ def discover(cfg: dict) -> dict[str, StrategyInfo]:
     found: dict[str, StrategyInfo] = {}
     INVALID.clear()
     for d in search_dirs(cfg):
-        for folder in sorted(p for p in d.iterdir()
-                             if p.is_dir() or (p.suffix == ".py" and not p.name.startswith(("_", ".")))):
+        for folder in sorted(p for p in d.iterdir() if p.is_dir()):
             try:
-                info = _from_folder(folder) if folder.is_dir() else _from_file(folder)
+                info = _from_folder(folder)
             except Exception as exc:
                 INVALID[str(folder)] = str(exc)
                 print(f"[ktrade] 매매조건 폴더 무시: {folder} — {exc}", file=sys.stderr)
@@ -175,8 +119,8 @@ def discover(cfg: dict) -> dict[str, StrategyInfo]:
 def _load_class(info: StrategyInfo) -> type:
     if info.cls is not None:
         return info.cls
-    clsname = info.entry.partition(":")[2]
-    path = entry_file(info)
+    file, _, clsname = info.entry.partition(":")
+    path = Path(info.source) / file
     mod_name = f"ktrade_condition_{info.id}"
     spec = importlib.util.spec_from_file_location(mod_name, path)
     if spec is None or spec.loader is None:

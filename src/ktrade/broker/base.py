@@ -21,4 +21,8 @@ class Broker(ABC):
 
     @abstractmethod
     def place_order(self, symbol: str, side: str, qty: int, price: float, slippage_pct: float = 0.5) -> dict:
-        """현재가(price) ± slippage_pct 지정가. 반환 {'status': SUBMITTED|FILLED|REJECTED, ...}"""
+        """현재가(price) ± slippage_pct 지정가. 반환 {'status': SUBMITTED|FILLED|REJECTED, 'order_no': ..., ...}"""
+
+    def cancel(self, symbol: str, order_no: str | None) -> dict:
+        """미체결 잔량 취소. 즉시 체결 브로커(paper)는 할 일이 없다."""
+        return {"status": "NOOP"}

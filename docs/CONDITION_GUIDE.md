@@ -18,29 +18,18 @@ ktrade는 **나만의 매매기법을 실험하는 엔진**입니다(키움증�
 ~/.ktrade/                          (Windows: C:\Users\<이름>\.ktrade)
   config.yaml                       ← 엔진 공통 손절·익절(exits), 켤 매매조건(strategies.enabled)
   strategies/
-    my_condition.py                 ← 매매조건 하나 = 파일 하나 (파일 이름 = 조건 id)
-                                    ←   Condition.select() — 종목 선정 + 매수 타이밍,
-                                    ←   클래스 속성 version·description·default_params, (선택) exits
+    my_condition/                   ← 매매조건 하나 = 폴더 하나 (폴더 이름 = 조건 id)
+      strategy.yaml                 ←   id·version·params, (선택) 이 조건만 쓸 exits
+      strategy.py                   ←   Condition.select() — 종목 선정 + 매수 타이밍
   experiments/my_condition/         ← ktrade test 할 때마다 쌓이는 실험 기록(지표 json + 거래 csv)
   docs/                             ← 이 가이드·AI용 규격 사본
 ```
-
-**다른 폴더에 두기**: `config.yaml`의 `strategies.dirs`에 폴더를 적으면 그 폴더도 읽고, `ktrade new`는 첫 폴더에 만듭니다
-(git으로 관리하는 폴더에 두고 여러 PC에서 같이 쓰기 좋음). `~`와 환경변수(`${DEV_ROOT}`, `%DEV_ROOT%`)를 쓸 수 있습니다.
-
-```yaml
-strategies:
-  dirs: ["${DEV_ROOT}/project/ktrade-strategies"]
-```
-
-**폴더 방식(예전)**: `ktrade new my_condition --folder` → `my_condition/strategy.yaml`(id·version·params·exits) +
-`strategy.py`. params를 코드와 따로 yaml로 두고 싶을 때만 씁니다. 동봉 예제 2개가 이 방식입니다.
 
 | 단계 | 명령 |
 |---|---|
 | 0. 데이터 | `config.yaml`의 `collect`에 받을 종목·시장·기간 → `ktrade collect` → `ktrade data`로 범위 확인 |
 | 1. 뼈대 | `ktrade new my_condition` |
-| 2. 작성 | `my_condition.py`의 '종목 선정'·'매수 타이밍' 두 곳 — 직접 또는 AI (아래) |
+| 2. 작성 | `strategy.py`의 '종목 선정'·'매수 타이밍' 두 곳 — 직접 또는 AI (아래) |
 | 3. 실험 | `ktrade test my_condition` = 검사 + 백테스트 + 직전 실험과 비교. 기간·대상 종목은 `config.yaml`의 `backtest` 또는 `--start --end --symbols` (DB에 있는 범위 안에서만) |
 | 4. 고치고 다시 | 조건·파라미터·청산 중 무엇을 바꾸든 `ktrade test` → `ktrade experiments my_condition`으로 이력 |
 | 5. 켜기 | `config.yaml` → `strategies.enabled: [{id: my_condition}]` (지금 설정으로 실험한 기록이 있어야 실행됨) |
@@ -92,7 +81,7 @@ class MyCondition(Condition):
 
 ## 손절·이익실현 (엔진 설정)
 
-`config.yaml`의 `exits`가 모든 조건의 기본이고, 조건별로 클래스의 `exits` 속성(폴더 방식이면 `strategy.yaml`의 `exits`, 또는 `enabled[].exits`)으로 덮어씁니다.
+`config.yaml`의 `exits`가 모든 조건의 기본이고, 조건별로 `strategy.yaml`의 `exits`(또는 `enabled[].exits`)로 덮어씁니다.
 
 ```yaml
 exits:
@@ -101,10 +90,15 @@ exits:
   trailing: {activate_pct: 5, trail_pct: 4}   # +5% 이후 최고가에서 -4%면 매도 (null이면 끔)
   max_hold_days: 10
   stop_check: close                    # close: 15:10 이후에만 손절 판단 / intraday: 닿는 즉시
+  scale_in:  [{pct: 50}, {pct: 30, drop_pct: 3}, {pct: 20, drop_pct: 6}]   # 분할매수 (선택, 비율 합 100)
+  scale_out: [{pct: 50, gain_pct: 3}, {pct: 30, gain_pct: 6}]              # 분할익절 (선택, 합 100 이하)
 ```
 
-- 손절·목표는 **실제 매수가 기준**으로 계산합니다(ATR·N일 최저가는 계획 시점 값).
+- 손절·목표는 **실제 매수가 기준**으로 계산합니다(ATR·N일 최저가는 계획 시점 값). 분할매수로 평균 매수가가 바뀌면 같이 바뀝니다.
+- 분할매수: 첫 차수는 바로 사고, 다음 차수는 **첫 매수가** 대비 `drop_pct`% 떨어지면 삽니다. 손절 %는 마지막 차수 간격보다 멀어야 합니다.
+- 분할익절: **평균 매수가** 대비 `+gain_pct`%에서 체결된 수량의 `pct`%를 팝니다. 나머지는 목표가·추적 손절·보유기간으로 정리됩니다.
 - 실전과 백테스트가 같은 계산을 씁니다. 백테스트에서 같은 날 손절과 목표가 둘 다 닿으면 손절로 봅니다(보수적).
+  한 봉 안의 순서: 분할매수 체결 → 손절·추적 손절 → 분할익절 → 목표가 → 보유기간 만료.
 - 매매조건 코드는 그대로 두고 청산만 바꿔 실험할 수 있습니다:
   `ktrade test my_condition --exits '{"stop": {"type": "atr", "value": 2}, "take_profit": {"type": "r", "value": 2}}'`
 

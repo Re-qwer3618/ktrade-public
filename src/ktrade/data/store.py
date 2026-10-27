@@ -24,11 +24,17 @@ _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS plan_trades (id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id TEXT NOT NULL,
        symbol TEXT NOT NULL, name TEXT, strategy TEXT, version TEXT, status TEXT NOT NULL, plan TEXT, qty INTEGER,
        buy_submitted_at TEXT, entry_date TEXT, entry_price REAL, exit_submitted_at TEXT, exit_date TEXT,
-       exit_price REAL, exit_reason TEXT, note TEXT DEFAULT '', updated_at TEXT NOT NULL, peak REAL)""",
+       exit_price REAL, exit_reason TEXT, note TEXT DEFAULT '', updated_at TEXT NOT NULL, peak REAL,
+       target_qty INTEGER, fills TEXT, sells TEXT, pending TEXT)""",
     """CREATE TABLE IF NOT EXISTS decisions (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL,
        strategy TEXT, symbol TEXT, signal TEXT, action TEXT, detail TEXT)""",
     """CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)""",
     "CREATE INDEX IF NOT EXISTS idx_ohlcv_date ON ohlcv(date)",
+    # 영웅문 조건식 신호 일지 — 편입(I)·이탈(D)·등록 시점 종목(INIT)과 그때 판단(action)·사유. 포워드 성적의 원자료
+    """CREATE TABLE IF NOT EXISTS condition_signals (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, date TEXT NOT NULL,
+       cond_name TEXT NOT NULL, seq TEXT, symbol TEXT NOT NULL, event TEXT NOT NULL, event_time TEXT, price REAL,
+       mode TEXT, action TEXT NOT NULL, reason TEXT DEFAULT '', plan_id TEXT)""",
+    "CREATE INDEX IF NOT EXISTS idx_cond_signals_date ON condition_signals(date, cond_name)",
 ]
 
 ACTIVE = ("submitted", "open", "closing")
@@ -51,6 +57,9 @@ class Store:
                 cols = {r[1] for r in c.execute("PRAGMA table_info(plan_trades)")}
                 if "peak" not in cols:  # 0.3 이전 DB
                     c.execute("ALTER TABLE plan_trades ADD COLUMN peak REAL")
+                for col, typ in (("target_qty", "INTEGER"), ("fills", "TEXT"), ("sells", "TEXT"), ("pending", "TEXT")):
+                    if col not in cols:  # 0.6.0 이전 DB (분할매수·분할익절·미체결 기록)
+                        c.execute(f"ALTER TABLE plan_trades ADD COLUMN {col} {typ}")
 
     def _conn(self) -> sqlite3.Connection:
         if self.readonly:
@@ -155,6 +164,25 @@ class Store:
                      timestamp: str | None = None) -> None:
         self._exec("INSERT INTO decisions (timestamp, strategy, symbol, signal, action, detail) VALUES (?,?,?,?,?,?)",
                    (timestamp or _now(), strategy, symbol, signal, action, detail))
+
+    # ---- 조건식 신호 일지 ----
+    def add_signal(self, cond_name: str, seq: str, symbol: str, event: str, action: str, reason: str = "",
+                   price: float | None = None, event_time: str = "", mode: str = "watch", plan_id: str | None = None,
+                   ts: str | None = None) -> int:
+        ts = ts or _now()
+        return self._exec("""INSERT INTO condition_signals (ts, date, cond_name, seq, symbol, event, event_time, price, mode, action,
+                             reason, plan_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                          (ts, ts[:10], cond_name, seq, symbol, event, event_time, price, mode, action, reason, plan_id))
+
+    def signals(self, date: str | None = None, cond_name: str | None = None) -> pd.DataFrame:
+        sql, params = "SELECT * FROM condition_signals WHERE 1=1", []
+        if date:
+            sql += " AND date = ?"
+            params.append(date)
+        if cond_name:
+            sql += " AND cond_name = ?"
+            params.append(cond_name)
+        return self.query(sql + " ORDER BY id", tuple(params))
 
     # ---- 계획 매매 기록 ----
     def add_plan_trade(self, plan: dict, strategy: str, version: str, qty: int, order_price: float,

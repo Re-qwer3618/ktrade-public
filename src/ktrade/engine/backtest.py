@@ -9,6 +9,7 @@
   공통: 시가 >= min_open 이어야 함
 매도 (매수 다음 날부터, 실제 매수가 기준 손절·목표 — engine/exits.py와 같은 계산):
   하루 안에서 손절과 목표가 둘 다 닿을 수 있으면 **손절로 본다** (일봉으로는 순서를 모름 — 확률을 부풀리지 않으려는 보수적 가정)
+  분할매수·분할익절(exits.scale_in / scale_out)은 exits.PositionSim이 같은 순서로 계산 — 손절·목표는 평균 매수가 기준
   stop_check: intraday = 저가가 손절가에 닿으면 손절가(시가가 이미 아래면 시가) / close = 종가 < 손절가이면 종가
   추적 손절: 전날까지의 최고가 기준, 저가가 닿으면 그 가격 / 목표: 고가 >= 목표가 → 목표가(시가가 이미 위면 시가)
   보유기간 만료: max_hold_days째 종가
@@ -83,36 +84,25 @@ def simulate(store: Store, plan: Plan, asof: str, cost_pct: float) -> dict | Non
     entry = fill_price(plan, d1)
     if entry is None:
         return {"triggered": False}
-    stop, target = X.levels(ex, entry)
-    intraday = ex["stop_check"] == "intraday"
+    pos = X.PositionSim(ex, entry)
     early = plan.entry.after <= "09:05"
-    # 장 시작에 산 날은 그날 안에서도 손절이 날 수 있다 (장 후반 매수는 그날 청산 없음)
-    if early and stop and intraday and d1.low <= stop:
-        return _done(d1.date, entry, d1.date, stop, "손절", 1, cost_pct)
-    peak = max(entry, float(d1.high)) if early else entry
+    # 장 시작에 산 날은 그날 안에서도 (장중) 손절이 날 수 있다 — 분할매수·익절은 다음 날부터. 장 후반 매수는 그날 청산 없음
+    if early and pos.step(entry, float(d1.high), float(d1.low), float(d1.close), late=False, stop_only=True):
+        return _done(d1.date, d1.date, pos, 1, cost_pct)
     rows = f.iloc[1:hold]
     for k, r in enumerate(rows.itertuples(), start=2):
-        trail = X.trail_level(ex, entry, peak)
-        hit_stop = stop is not None and (r.low <= stop if intraday else r.close < stop)
-        hit_trail = trail is not None and r.low <= trail
-        hit_tp = target is not None and r.high >= target
-        if hit_stop or hit_trail:                       # 손절·추적 손절을 목표보다 먼저 (보수적)
-            if hit_stop and (not hit_trail or stop >= trail):
-                px = min(r.open, stop) if intraday else r.close
-                return _done(d1.date, entry, r.date, px, "손절", k, cost_pct)
-            return _done(d1.date, entry, r.date, min(r.open, trail), "추적 손절", k, cost_pct)
-        if hit_tp:
-            return _done(d1.date, entry, r.date, max(r.open, target), "목표가", k, cost_pct)
-        peak = max(peak, float(r.high))
-    if len(rows) >= hold - 1:
-        last = rows.iloc[-1] if len(rows) else d1
-        return _done(d1.date, entry, last.date, float(last.close), "보유기간 만료", hold, cost_pct)
+        if pos.step(float(r.open), float(r.high), float(r.low), float(r.close), time_exit=k == hold):
+            return _done(d1.date, r.date, pos, k, cost_pct)
+    if hold == 1:
+        pos.close_all(float(d1.close), "보유기간 만료")
+        return _done(d1.date, d1.date, pos, 1, cost_pct)
     return {"triggered": True, "open": True}           # 데이터 끝까지 보유 중
 
 
-def _done(d_in, entry, d_out, px, reason, days, cost_pct) -> dict:
-    return {"triggered": True, "entry_date": d_in, "entry": float(entry), "exit_date": d_out, "exit": float(px),
-            "reason": reason, "days": days, "ret_pct": (float(px) / entry - 1) * 100 - cost_pct}
+def _done(d_in, d_out, pos: X.PositionSim, days, cost_pct) -> dict:
+    r = pos.result(cost_pct)
+    return {"triggered": True, "entry_date": d_in, "entry": float(r["entry"]), "exit_date": d_out, "exit": float(r["exit"]),
+            "reason": r["reason"], "days": days, "ret_pct": r["ret_pct"], "fills": r["fills"]}
 
 
 def _mkt(store: Store, market: str, d0: str, d1: str) -> float | None:

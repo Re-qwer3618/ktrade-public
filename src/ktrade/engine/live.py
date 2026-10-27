@@ -53,6 +53,16 @@ class QuoteBoard:
         return q
 
 
+def request_stop(store: Store, target: str, now: datetime | None = None) -> None:
+    """화면의 '중지' — 돌고 있는 ktrade run(target=run) / hts watch(target=hts)가 다음 주기에 스스로 끝난다."""
+    store.set_setting(f"process.stop.{target}", {"at": (now or datetime.now()).isoformat(timespec="seconds")})
+
+
+def stop_requested(store: Store, target: str, started: datetime) -> bool:
+    req = store.get_setting(f"process.stop.{target}") or {}
+    return bool(req.get("at")) and req["at"] >= started.isoformat(timespec="seconds")
+
+
 def market_open(cfg: dict, now: datetime) -> bool:
     return now.weekday() < 5 and cfg["live"]["market_open"] <= now.strftime("%H:%M") <= cfg["live"]["market_close"]
 
@@ -73,9 +83,13 @@ def run(cfg: dict, live_confirm: bool = False, once: bool = False, quote_source=
     board = QuoteBoard(quote_source)
     ex = Executor(store, broker, risk, board.quote)
     loaded_for = holiday_noted = ""
+    started = now_fn()
     log.info(f"시작: broker={cfg['broker']} is_mock={cfg['kiwoom'].get('is_mock', True)}")
     while True:
         now = now_fn()
+        if stop_requested(store, "run", started):
+            log.info("화면에서 중지 요청 — 끝냄")
+            return
         today = now.strftime("%Y-%m-%d")
         if market_open(cfg, now):
             if loaded_for != today:
@@ -89,6 +103,7 @@ def run(cfg: dict, live_confirm: bool = False, once: bool = False, quote_source=
                     log.info("오늘 일자 시세가 없음 — 휴장일(또는 개장 직후)로 보고 쉰다")
                     holiday_noted = today
             else:
+                ex.guard(now)                  # 하루 손익 한도 → 정지(+전량 매도)
                 for sym in ex.symbols():
                     try:
                         ex.check(sym, now)

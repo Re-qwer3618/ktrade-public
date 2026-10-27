@@ -52,7 +52,7 @@ def history(cfg: dict, sid: str) -> list[dict]:
     d = _dir(cfg, sid)
     if not d.is_dir():
         return []
-    return [json.loads(f.read_text(encoding="utf-8")) for f in sorted(d.glob("*.json"))]
+    return [json.loads(f.read_text(encoding="utf-8")) for f in sorted(d.glob("*.json"), key=lambda f: (f.name[:15], f.stat().st_mtime_ns))]
 
 
 def has_run(cfg: dict, sid: str, setup: str) -> bool:

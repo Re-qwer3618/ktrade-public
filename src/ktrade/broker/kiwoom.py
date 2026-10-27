@@ -55,6 +55,17 @@ class KiwoomBroker(Broker):
         try:
             fn = self.api.order.buy_order if side == "BUY" else self.api.order.sell_order
             res = fn(dmst_stex_tp="KRX", stk_cd=symbol, ord_qty=str(qty), trde_tp="0", ord_uv=str(px))
-            return {"status": "SUBMITTED", "order_price": px, "response": res}
+            no = res.get("ord_no") if isinstance(res, dict) else None
+            return {"status": "SUBMITTED", "order_price": px, "order_no": no, "response": res}
         except KiwoomAPIError as e:
             return {"status": "REJECTED", "reason": f"{e.code}: {e.message}"}
+
+    def cancel(self, symbol: str, order_no: str | None) -> dict:
+        """kt10003 취소 — cncl_qty 0 = 남은 수량 전부."""
+        if not order_no:
+            return {"status": "NOOP", "reason": "주문번호 없음"}
+        try:
+            res = self.api.order.cancel_order(dmst_stex_tp="KRX", orig_ord_no=str(order_no), stk_cd=symbol, cncl_qty="0")
+            return {"status": "CANCELLED", "response": res}
+        except KiwoomAPIError as e:
+            return {"status": "FAILED", "reason": f"{e.code}: {e.message}"}
