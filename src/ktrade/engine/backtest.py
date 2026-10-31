@@ -15,6 +15,10 @@
   보유기간 만료: max_hold_days째 종가
 비용: 왕복 cost_pct(기본 0.25% = 수수료 양쪽 + 거래세 근사)를 뺀다. 보유 중인 종목은 같은 조건이 또 골라도 사지 않는다(실전과 같음).
 한계: 일봉 근사, 생존편향(상장폐지 종목이 DB에 없으면 실제보다 좋게 나옴), 체결 미끄러짐·호가 미반영.
+
+장중 조건을 붙이면(intraday=장중 조건 인스턴스): 실행일 1분봉을 처음부터 한 개씩 넘기며 check()를 부르고, 첫 신호 분봉의 종가에 산다.
+그날 남은 분봉으로 청산을 보고, 다음 날부터는 일봉. 실행일 1분봉을 받아 두지 않은 계획은 건너뛴다(no_minutes에 셈) —
+키움은 분봉을 최근 몇 달만 주므로, 매일 계획·잔고 종목 분봉을 받아 쌓을수록(ktrade daily) 백테스트 기간이 길어진다.
 """
 from __future__ import annotations
 
@@ -112,10 +116,58 @@ def _mkt(store: Store, market: str, d0: str, d1: str) -> float | None:
     return (c[d1] / c[d0] - 1) * 100
 
 
+def simulate_intraday(store: Store, plan: Plan, asof: str, icond, src, cost_pct: float) -> dict | None:
+    """장중 조건: 실행일 1분봉마다 check() → 첫 신호 분봉 종가에 매수 → 그날 분봉, 다음 날부터 일봉으로 청산."""
+    from ktrade.sdk.intraday import IntradayContext, Signal
+    ex = plan.exits or X.resolve()
+    hold = int(plan.max_hold_days)
+    f = _future(store, plan.symbol, asof, hold + 1)
+    if f.empty:
+        return None
+    d1 = f.iloc[0].date
+    mins = src.day_minutes(plan.symbol, d1)
+    if mins.empty:
+        return {"triggered": False, "no_minutes": True}
+    daily = src.daily(plan.symbol, mins.index[0].to_pydatetime())
+    entry = None
+    for i in range(len(mins)):
+        price = float(mins["close"].iloc[i])
+        ctx = IntradayContext(symbol=plan.symbol, now=mins.index[i].to_pydatetime(), price=price, minutes=mins.iloc[:i + 1],
+                              daily=daily, params=icond.params, name=plan.name, event="watch")
+        try:
+            sig = icond.check(ctx)
+        except Exception:
+            sig = None
+        ok = sig.buy if isinstance(sig, Signal) else bool(sig)
+        cap = sig.max_price if isinstance(sig, Signal) else None
+        if ok and not (cap and price > cap):
+            entry = price
+            break
+    if entry is None:
+        return {"triggered": False}
+    pos = X.PositionSim(ex, entry)
+    after = ex.get("stop_check_after", "15:10")
+    for ts, r in mins.iloc[i + 1:].iterrows():
+        hhmm = ts.strftime("%H:%M")
+        if pos.step(float(r.open), float(r.high), float(r.low), float(r.close), late=hhmm >= after,
+                    time_exit=hold <= 1 and hhmm >= "15:15", time_reason="보유기간 만료"):
+            return _done(d1, d1, pos, 1, cost_pct)
+    if hold <= 1:
+        pos.close_all(float(mins["close"].iloc[-1]), "보유기간 만료")
+        return _done(d1, d1, pos, 1, cost_pct)
+    for k, r in enumerate(f.iloc[1:hold].itertuples(), start=2):
+        if pos.step(float(r.open), float(r.high), float(r.low), float(r.close), time_exit=k == hold):
+            return _done(d1, r.date, pos, k, cost_pct)
+    return {"triggered": True, "open": True}
+
+
 def run(store: Store, info, cond, rules: dict, start: str, end: str, cost_pct: float = 0.25, max_per_day: int = 20,
-        oos_ratio: float = 0.3, progress=None, symbols: list[str] | None = None) -> dict:
-    """symbols를 주면 매매조건에게 그 종목만 보인다(대상 종목을 좁힌 실험). None = DB에 있는 전 종목."""
-    trades, n_picks, n_trig, n_rej, n_open, n_busy = [], 0, 0, 0, 0, 0
+        oos_ratio: float = 0.3, progress=None, symbols: list[str] | None = None, intraday=None) -> dict:
+    """symbols를 주면 매매조건에게 그 종목만 보인다(대상 종목을 좁힌 실험). None = DB에 있는 전 종목.
+    intraday = 장중 조건 인스턴스(Intraday) — 주면 매수 시점은 실행일 1분봉에 그 조건을 돌려 정한다."""
+    from ktrade.engine.intraday import StoredSource
+    src = StoredSource(store) if intraday is not None else None
+    trades, n_picks, n_trig, n_rej, n_open, n_busy, n_nomin = [], 0, 0, 0, 0, 0, 0
     busy: dict[str, str] = {}
     days = trading_days(store, start, end)
     for i, d in enumerate(days):
@@ -131,7 +183,10 @@ def run(store: Store, info, cond, rules: dict, start: str, end: str, cost_pct: f
                 if busy.get(p.symbol, "") >= d:
                     n_busy += 1
                     continue
-                res = simulate(store, p, d, cost_pct)
+                res = simulate(store, p, d, cost_pct) if src is None else simulate_intraday(store, p, d, intraday, src, cost_pct)
+                if res and res.get("no_minutes"):
+                    n_nomin += 1
+                    continue
                 if not res or not res["triggered"]:
                     continue
                 n_trig += 1
@@ -150,6 +205,7 @@ def run(store: Store, info, cond, rules: dict, start: str, end: str, cost_pct: f
                                        "trigger_rate": (n_trig / n_picks * 100) if n_picks else None, "rejected": n_rej,
                                        "skipped_holding": n_busy, "still_open": n_open, "cost_pct": cost_pct,
                                        "exits": X.describe(rules),
+                                       **({"intraday": getattr(intraday, "id", ""), "no_minutes": n_nomin} if src else {}),
                                        "universe": f"{len(symbols)}종목 지정" if symbols else "DB 전 종목"}, oos_ratio)
 
 

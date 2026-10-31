@@ -81,7 +81,11 @@ def run(cfg: dict, live_confirm: bool = False, once: bool = False, quote_source=
         quote_source = KiwoomData(cfg)
     risk = Risk.from_config(cfg, broker.total_deposit())
     board = QuoteBoard(quote_source)
-    ex = Executor(store, broker, risk, board.quote, role="plan")
+    runner = None
+    if hasattr(quote_source, "minute") and hasattr(quote_source, "daily"):     # 키움 실시간 데이터 (실전)
+        from ktrade.engine.intraday import KiwoomSource, Runner
+        runner = Runner(cfg, KiwoomSource(quote_source))
+    ex = Executor(store, broker, risk, board.quote, role="plan", intraday=runner)
     loaded_for = holiday_noted = ""
     started = now_fn()
     log.info(f"시작: broker={cfg['broker']} is_mock={cfg['kiwoom'].get('is_mock', True)}")
@@ -94,6 +98,7 @@ def run(cfg: dict, live_confirm: bool = False, once: bool = False, quote_source=
         if market_open(cfg, now):
             if loaded_for != today:
                 items, why = planner.load_for_today(cfg, store, today)
+                items = check_against_kiwoom(store, items, quote_source, now)
                 ex.set_plans(items)
                 loaded_for = today
                 log.info(f"계획: {why}")
@@ -113,3 +118,22 @@ def run(cfg: dict, live_confirm: bool = False, once: bool = False, quote_source=
         if once:
             return
         sleep(cfg["live"]["interval_sec"])
+
+
+def check_against_kiwoom(store: Store, items: list, quote_source, now: datetime) -> list:
+    """계획(내 데이터로 계산)과 키움 일봉의 기준일 종가가 맞는지 — 어긋난 계획은 빼고 이유를 남긴다.
+    매매는 키움 실시간 데이터 기준이고, 내 데이터는 종목 검색에만 쓴다."""
+    if not items or not hasattr(quote_source, "daily"):
+        return items
+    from ktrade.engine.intraday import verify_plans
+    asof = store.last_index_date_before(now.strftime("%Y-%m-%d"))
+    syms = sorted({p["symbol"] for _, _, p in items})
+    keep, dropped = verify_plans(items, store.market.closes(asof, syms), quote_source.daily, asof)
+    ts = now.isoformat(timespec="seconds")
+    pids = {(sid, p["symbol"]): p["plan_id"] for sid, _, p in items}
+    for sid, sym, why in dropped:
+        store.log_decision(sid, sym, "PLAN_SKIP", "NONE", f"{pids.get((sid, sym), sym)} {why}", ts)
+        log.warning(f"[{sym}] {why}")
+    if dropped:
+        log.info(f"계획 {len(items)}건 중 {len(dropped)}건은 키움 데이터와 맞지 않아 뺌")
+    return keep

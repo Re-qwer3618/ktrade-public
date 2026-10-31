@@ -87,6 +87,8 @@ def validate(cfg: dict, strategy_id: str, asof: str | None = None, params: dict 
     except Exception as exc:
         rep.errors.append(f"불러오기 실패: {type(exc).__name__}: {exc}")
         return rep
+    if info.kind == "intraday":
+        return _validate_intraday(strat, rep)
     db = paths(cfg)["db"]
     if not db.exists():
         rep.warnings.append("시세 DB가 없어 실행 검사는 건너뜀 (ktrade collect 또는 import-db 후 다시)")
@@ -132,4 +134,39 @@ def validate(cfg: dict, strategy_id: str, asof: str | None = None, params: dict 
     except Exception as exc:
         import traceback
         rep.errors.append("실행 중 오류:\n" + "".join(traceback.format_exception(exc, limit=-3)).rstrip())
+    return rep
+
+
+def _validate_intraday(strat, rep: Report) -> Report:
+    """장중 조건 — 가짜 1분봉(오르는 날·내리는 날)으로 check()를 불러 오류 없이 None 또는 Signal을 돌려주는지."""
+    import numpy as np
+    import pandas as pd
+
+    from ktrade.sdk.intraday import IntradayContext, Signal
+    rep.notes.append("장중 조건(intraday) — 가짜 분봉으로 check() 실행 검사 (수익과 무관)")
+    day = pd.Timestamp("2026-01-05 09:00")
+    for label, drift in (("오르는 날", 0.0008), ("내리는 날", -0.0008)):
+        n = 120
+        close = 10000 * np.cumprod(1 + np.full(n, drift))
+        mins = pd.DataFrame({"open": close, "high": close * 1.001, "low": close * 0.999, "close": close,
+                             "volume": np.full(n, 1000.0)}, index=pd.date_range(day, periods=n, freq="min"))
+        daily = pd.DataFrame({"open": 10000.0, "high": 10100.0, "low": 9900.0, "close": 10000.0, "volume": 100000.0},
+                             index=pd.date_range("2025-06-01", periods=150, freq="B"))
+        ctx = IntradayContext(symbol="000000", now=mins.index[-1].to_pydatetime(), price=float(close[-1]), minutes=mins,
+                              daily=daily, params=strat.params, event="watch")
+        t0 = time.perf_counter()
+        try:
+            out = strat.check(ctx)
+        except Exception as exc:
+            import traceback
+            rep.errors.append(f"{label} check() 오류:\n" + "".join(traceback.format_exception(exc, limit=-3)).rstrip())
+            continue
+        if out is not None and not isinstance(out, (Signal, bool)):
+            rep.errors.append(f"{label}: check()는 Signal 또는 None을 돌려줘야 합니다 (받은 값 {type(out).__name__})")
+            continue
+        el = time.perf_counter() - t0
+        rep.notes.append(f"{label}: " + ("매수 신호 — " + (out.reason if isinstance(out, Signal) else "") if out else "신호 없음")
+                         + f" ({el * 1000:.0f}ms)")
+        if el > 1.0:
+            rep.warnings.append(f"{label} check()가 {el:.1f}초 — 장중엔 종목마다 자주 부르므로 가볍게 쓰세요")
     return rep

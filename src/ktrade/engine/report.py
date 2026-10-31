@@ -43,7 +43,7 @@ def plan_outcomes(store: Store, plans_dir: Path, cost_pct: float = 0.25) -> pd.D
 
 
 # ───────── 계획 탭: 계획마다 실제로 어떻게 됐나(이유) + 계획대로였다면 ─────────
-STATUS_KO = {"submitted": "매수 주문 중", "open": "보유 중", "closing": "매도 주문 중", "closed": "청산",
+STATUS_KO = {"submitted": "매수 주문 중", "open": "잔고", "closing": "매도 주문 중", "closed": "매도 완료",
              "unfilled": "주문했지만 미체결", "rejected": "주문 거부"}
 
 
@@ -117,7 +117,7 @@ def plan_review(store: Store, docs: list[dict], asof: str, cost_pct: float = 0.2
                 virt = f"도달 · {r.get('reason')} {r.get('ret_pct', 0):+.2f}%"
             rows.append({"매매조건": f"{doc['strategy']} {doc['version']}", "순위": p.get("rank"), "종목": p.get("name"),
                          "코드": p["symbol"], "매수 조건": f"시가≥{e['min_open']:,.0f} · {e['after']} 이후 "
-                         f"{e['min_price']:,.0f}~{e['max_price']:,.0f}", "손절": p.get("stop"), "목표": p.get("target"),
+                         f"{e['min_price']:,.0f}~{e['max_price']:,.0f}", "손실제한가": p.get("stop"), "이익실현가": p.get("target"),
                          "결과": got, "이유": why, "계획대로였다면": virt, "가상 수익%": r.get("ret_pct"),
                          "선정 사유": p.get("basis", "")})
     return pd.DataFrame(rows)

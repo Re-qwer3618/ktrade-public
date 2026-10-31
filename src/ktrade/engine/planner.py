@@ -6,10 +6,6 @@
 백테스트 먼저(strategies.require_backtest, 기본 true): 조건의 코드·파라미터·청산 설정 조합(setup)으로 백테스트한
 기록이 없으면 그 조건은 계획을 만들지 않는다 — 조건을 바꾸면 `ktrade test <id>`로 확인하고 쓰라는 장치.
 
-영웅문 조건식 조합(strategies.enabled[].hts_filter: "조건식 이름"): 계획을 만들 때 그 조건식을 키움에 한 번 조회해, 매매조건이
-고른 종목 중 지금 조건식에도 걸린 종목만 남긴다(교집합). 조건식은 과거 결과를 주지 않아 백테스트에는 반영되지 않는다.
-조회에 실패하면 그 매매조건은 그날 계획을 만들지 않는다(걸러지지 않은 계획으로 매매하지 않게).
-
 외부 계획(config external_plans): 다른 프로그램·언어가 만든 계획 파일. stop/target이 없으면 엔진 청산 설정으로 채운다.
 """
 from __future__ import annotations
@@ -71,13 +67,8 @@ def _external(item: dict, asof: str, rules: dict, view: DataView) -> tuple[str, 
     return None
 
 
-def _scan_codes(cfg: dict, name: str) -> set[str]:
-    from ktrade.data.hts import HtsClient
-    return set(HtsClient(cfg).scan(name)[1]["code"])
-
-
 def run_plans(cfg: dict, store: Store, asof: str | None = None, out_dir: Path | None = None,
-              only: list[str] | None = None, hts_scan=None) -> dict:
+              only: list[str] | None = None) -> dict:
     asof = asof or last_trading_day(store)
     if not asof:
         raise RuntimeError("지수 일봉이 없어 기준일을 정할 수 없습니다 (먼저 ktrade collect 또는 import-db)")
@@ -86,14 +77,17 @@ def run_plans(cfg: dict, store: Store, asof: str | None = None, out_dir: Path | 
     produced: list[tuple[str, str, list[Plan], str]] = []
     errors, skipped = {}, {}
     need_bt = bool(cfg["strategies"].get("require_backtest", True))
+    found = loader.discover(cfg)
     items = {(e if isinstance(e, dict) else {"id": str(e)})["id"]: (e if isinstance(e, dict) else {})
              for e in cfg["strategies"].get("enabled", [])}
-    scanned: dict[str, set[str]] = {}
-    filtered: list[tuple[str, str, str]] = []
     for info, cond, rules in loader.enabled(cfg):
         if only and info.id not in only:
             continue
-        setup = experiments.setup_hash(info, cond.params, rules)
+        ik = experiments.intraday_key(found, items.get(info.id))
+        if ik and (ik["id"] not in found or found[ik["id"]].kind != "intraday"):
+            errors[info.id] = f"장중 조건 '{ik['id']}'를 찾지 못했습니다"
+            continue
+        setup = experiments.setup_hash(info, cond.params, rules, ik)
         if need_bt and not experiments.has_run(cfg, info.id, setup):
             skipped[info.id] = f"이 설정(코드·파라미터·청산)으로 백테스트한 기록이 없어 건너뜀 — ktrade test {info.id}"
             log.warning(f"[{info.id}] {skipped[info.id]}")
@@ -101,19 +95,10 @@ def run_plans(cfg: dict, store: Store, asof: str | None = None, out_dir: Path | 
         try:
             picks = cond.select(Context(asof=asof, data=view, params=cond.params, strategy_id=info.id,
                                         log=logging.getLogger(f"ktrade.condition.{info.id}"))) or []
-            hf = items.get(info.id, {}).get("hts_filter")
-            if hf:
-                try:
-                    if hf not in scanned:
-                        scanned[hf] = (hts_scan or (lambda n: _scan_codes(cfg, n)))(hf)
-                except Exception as exc:
-                    errors[info.id] = f"영웅문 조건식 '{hf}' 조회 실패 — 이 매매조건은 오늘 계획 없음: {exc}"
-                    log.error(f"[{info.id}] {errors[info.id]}")
-                    continue
-                keep = [pk for pk in picks if pk.symbol in scanned[hf]]
-                filtered += [(info.id, pk.symbol, f"영웅문 조건식 '{hf}'에 없음") for pk in picks if pk.symbol not in scanned[hf]]
-                picks = keep
-            produced.append((info.id, info.version, compose(list(picks), rules, view), setup))
+            plans = compose(list(picks), rules, view)
+            for p in plans:                     # 장중 조건: 매수 시점은 장중 조건이 정한다 (감시 목록)
+                p.intraday = {"id": ik["id"], "params": ik["params"]} if ik else {}
+            produced.append((info.id, info.version, plans, setup))
         except Exception:  # 조건 하나가 죽어도 다른 조건 계획은 만든다
             errors[info.id] = traceback.format_exc(limit=5)
             log.error(f"[{info.id}] select() 오류\n{errors[info.id]}")
@@ -131,7 +116,6 @@ def run_plans(cfg: dict, store: Store, asof: str | None = None, out_dir: Path | 
     symbols = sorted({p.symbol for _, _, ps, _ in produced for p in ps})
     closes = store.market.closes(asof, symbols) if symbols else {}
     ok, rejected = guard.screen([(sid, ps) for sid, _, ps, _ in produced], closes, int(cfg["risk"]["max_plans_per_strategy"]))
-    rejected = filtered + list(rejected)
 
     out.mkdir(parents=True, exist_ok=True)
     now = datetime.now().isoformat(timespec="seconds")

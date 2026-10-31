@@ -58,7 +58,9 @@ def _claude(key: str, model: str, system: str, prompt: str, max_tokens: int) -> 
     client = anthropic.Anthropic(api_key=key, timeout=TIMEOUT)
     try:
         # 안전 분류기가 거절하면 서버가 다른 모델로 이어 답하게(fallbacks) — 그래도 거절이면 refusal
-        r = client.beta.messages.create(model=model, max_tokens=max_tokens, system=system,
+        # 긴 시스템 프롬프트(작성 규격·개인 스킬)는 캐시 — 같은 스킬로 여러 종목을 물을 때 싸고 빠르게
+        r = client.beta.messages.create(model=model, max_tokens=max_tokens,
+                                        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
                                         messages=[{"role": "user", "content": prompt}],
                                         thinking={"type": "adaptive"}, output_config={"effort": "high"},
                                         betas=["server-side-fallback-2026-07-01"], fallbacks="default")
@@ -132,6 +134,82 @@ def writer_system(docs_dir: Path | None) -> str:
     spec = (docs_dir / "LLM_CONTEXT.md").read_text(encoding="utf-8") if docs_dir and (docs_dir / "LLM_CONTEXT.md").exists() else ""
     return ("아래 ktrade 매매조건 작성 규격을 정확히 따른다. 답에는 ```yaml 블록(strategy.yaml) 하나와 ```python 블록(strategy.py) "
             "하나를 반드시 넣고, 그 밖의 설명은 짧게 한국어로.\n\n" + spec)
+
+
+SEARCH_SYSTEM = """너는 한국 주식 종목 검색 조건을 만드는 도우미다. 사용자의 자연어 요청을 아래 JSON 형식 하나로만 바꾼다.
+```json 블록 하나만 답한다. 형식에 없는 조건(재무·뉴스·테마 등)은 넣지 말고 summary에 '반영 못 함: …'으로 적는다.
+
+{
+  "markets": ["코스피", "코스닥"],                  // 비우면 전체
+  "exclude_kinds": true,                            // ETF·ETN·스팩·리츠·우선주·관리종목·거래정지 제외
+  "price": {"min": null, "max": null},              // 최근 종가(원)
+  "cap": {"min": null, "max": null},                // 시가총액(억 원)
+  "rules": [                                        // 모두 만족(AND)
+    {"type": "change", "days": 5, "min": 10, "max": null},          // N일 등락률 %
+    {"type": "volume_ratio", "days": 20, "min": 2, "max": null},    // 오늘 거래량 ÷ 직전 N일 평균
+    {"type": "value", "days": 20, "min": 50, "max": null},          // N일 평균 거래대금(억 원)
+    {"type": "ma", "days": 20, "position": "above", "within_pct": null},   // 종가가 N일 이평 위(above)/아래(below), 거리 % 이내
+    {"type": "high", "days": 60, "within_pct": 3},                  // N일 최고가 대비 x% 이내 (0 = 신고가)
+    {"type": "low", "days": 60, "within_pct": 5},                   // N일 최저가 대비 x% 이내
+    {"type": "ma_cross", "fast": 5, "slow": 20, "direction": "golden", "within_days": 3}   // 최근 N일 안 골든(dead)크로스
+  ],
+  "sort": {"by": "value", "days": 20, "desc": true},   // change | volume_ratio | value | cap
+  "limit": 30,
+  "summary": "적용한 조건을 한국어 한 줄로"
+}"""
+
+STOCK_SYSTEM = ("너는 한국 주식 차트를 읽는 분석가다. 주어진 일봉·거래량·지수 데이터만 근거로, 한국어로 분명하게 쓴다. "
+                "매수·매도를 권하거나 수익을 보장하지 않는다. 데이터에 없는 사실(뉴스·실적)은 지어내지 않는다.")
+
+
+def skill_text(cfg: dict, cap: int = 300_000) -> tuple[str, list[str]]:
+    """개인 스킬 폴더(config ai.skill_dir)의 SKILL.md + references/*.md(바로 아래 것만) — (본문, 읽은 파일). 없으면 ("", [])."""
+    d = settings(cfg).get("skill_dir")
+    if not d:
+        return "", []
+    root = Path(str(d)).expanduser()
+    files = [root / "SKILL.md"] + sorted((root / "references").glob("*.md")) if (root / "SKILL.md").exists() else []
+    parts, used, size = [], [], 0
+    for f in files:
+        t = f.read_text(encoding="utf-8", errors="replace")
+        if size + len(t) > cap:
+            break
+        parts.append(f"=== {f.relative_to(root).as_posix()} ===\n{t}")
+        used.append(f.relative_to(root).as_posix())
+        size += len(t)
+    return "\n\n".join(parts), used
+
+
+def stock_system(cfg: dict) -> str:
+    skill, _ = skill_text(cfg)
+    if not skill:
+        return STOCK_SYSTEM
+    return (STOCK_SYSTEM + "\n\n아래는 사용자의 개인 분석 스킬이다. 이 스킬의 방법·용어·출력 형식을 그대로 따라 분석한다. "
+            "스킬이 요구하는 자료(호가창·분차트 등)가 없으면 '자료 없음'으로 표시하고 있는 자료로만 판단한다.\n\n" + skill)
+
+
+def stock_prompt(symbol: str, name: str, bars, index=None, question: str = "") -> str:
+    """일봉(최근 120개)과 지수를 표로 붙인 분석 요청."""
+    cols = [c for c in ("date", "open", "high", "low", "close", "volume") if c in bars]
+    parts = [f"종목: {name} ({symbol})", f"일봉 최근 {min(len(bars), 120)}개 (CSV):", bars[cols].tail(120).to_csv(index=False)]
+    if index is not None and len(index):
+        parts += ["코스피 지수 최근 60개 (CSV):", index[["date", "close"]].tail(60).to_csv(index=False)]
+    parts.append(question or "이 종목을 분석해 줘.")
+    return "\n".join(parts)
+
+
+def parse_json(text: str) -> dict:
+    """AI 답에서 JSON 하나 (```json 블록 또는 맨 바깥 { })."""
+    m = re.search(r"```(?:json)?\s*\n(.*?)```", text, re.S)
+    raw = m.group(1) if m else text[text.find("{"): text.rfind("}") + 1]
+    raw = re.sub(r"//[^\n]*", "", raw)                       # 주석을 따라 쓴 경우
+    try:
+        d = json.loads(raw)
+    except ValueError as exc:
+        raise AiError(f"검색 조건(JSON)을 읽지 못했습니다 — 다시 시도해 보세요: {exc}") from exc
+    if not isinstance(d, dict):
+        raise AiError("검색 조건 형식이 아닙니다")
+    return d
 
 
 def parse_files(text: str) -> tuple[str, str]:

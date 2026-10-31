@@ -66,7 +66,6 @@ DEFAULTS: dict = {
         "require_backtest": True,          # 지금 설정으로 백테스트한 기록이 없는 조건은 계획을 만들지 않음
     },
     "external_plans": [],                  # [{id: my_strategy, dir: "C:/.../plans", use_engine_exits: false}]
-    "forward_test": [],                    # 체험판 조건식 테스트 — 관찰만 하는 조건식 이름 (hts_conditions와 합쳐 10개까지)
     "hts_conditions": [],                  # 영웅문 조건식 (장중 실시간 편입 신호) — 형식은 engine/signals.py DEFAULT_COND
     "collect": {                                            # 키움에서 받아 DB에 쌓을 범위 (사용자가 정함)
         "symbols": [], "symbols_file": None,                   # 종목 직접 지정. 비면 market_names 시장 전체
@@ -83,7 +82,8 @@ DEFAULTS: dict = {
     },
     "chart": {"ma": [5, 20, 60, 120], "volume_ma": [20]},     # 차트 이동평균선 (저장하지 않고 볼 때 계산)
     "ai": {"provider": "claude",                               # AI 도우미(AI판 구독·관리자) — 본인 API 키, 모델 이름은 바꿀 수 있음
-           "models": {"claude": "claude-opus-5-5", "gemini": "gemini-2.5-pro", "openai": "gpt-5"}},
+           "models": {"claude": "claude-opus-5-5", "gemini": "gemini-2.5-pro", "openai": "gpt-5"},
+           "skill_dir": None},                                 # 종목 분석에 쓸 개인 스킬 폴더 (SKILL.md + references/*.md)
     "schedule": {"daily": "16:30", "run": "08:50",          # 자동 실행 시각 (null = 그 작업 안 함) — ktrade schedule install
                  "days": ["MON", "TUE", "WED", "THU", "FRI"]},
     "live": {"interval_sec": 60, "market_open": "09:00", "market_close": "15:30"},
@@ -170,8 +170,6 @@ hts_conditions: []
 #    reentry: false
 #    exit_on_remove: false      # 조건 이탈에 매도 (매도 조건식 역할)
 
-# 백테스트 체험판의 조건식 테스트 — 주문 없이 관찰만, 신호를 쌓아 '그때 샀다면'으로 평가 (hts_conditions와 합쳐 10개까지)
-forward_test: []
 
 # 키움에서 받아 DB에 쌓을 범위 — ktrade collect / daily 가 이대로 받는다 (받아 둔 범위 확인: ktrade data)
 collect:

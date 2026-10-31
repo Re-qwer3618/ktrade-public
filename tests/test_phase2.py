@@ -1,4 +1,4 @@
-"""2단계: 분할매수·분할익절(백테스트·성적표·실행 공용 PositionSim) + 계좌 한도(하루 손익·시간 청산·긴급 정지) + 미체결 취소."""
+"""2단계: 분할매수·분할매도(백테스트·성적표·실행 공용 PositionSim) + 계좌 한도(하루 손익·시간 청산·긴급 정지) + 미체결 취소."""
 from __future__ import annotations
 
 import sqlite3
@@ -57,7 +57,7 @@ def test_position_sim_scale_in_moves_average_and_levels():
     assert pos.held == pytest.approx(0.5)
     assert pos.step(10050, 10400, 10050, 10350)             # 평균 +6% = 10,388 → 나머지 목표가
     r = pos.result(cost_pct=0)
-    assert r["reason"] == "분할익절 +3% → 목표가" and r["fills"] == 2
+    assert r["reason"] == "분할매도 +3% → 이익실현" and r["fills"] == 2
     assert r["ret_pct"] == pytest.approx(((10094 + 10388) / 2 / 9800 - 1) * 100, abs=0.01)
 
 
@@ -65,7 +65,7 @@ def test_position_sim_stop_from_average_and_conservative_order():
     pos = X.PositionSim(X.resolve(SCALED), 10000)
     assert pos.step(10000, 10500, 8900, 9000)               # 2차 9,600 체결 → 평균 9,800, 손절 9,016 같은 봉에서 → 손절
     r = pos.result(cost_pct=0)
-    assert r["reason"] == "손절" and r["exit"] == pytest.approx(9016)
+    assert r["reason"] == "손실제한" and r["exit"] == pytest.approx(9016)
 
 
 def test_forward_simulate_uses_scaling():
@@ -73,7 +73,7 @@ def test_forward_simulate_uses_scaling():
                          for m, (o, h, low, c) in enumerate([(10000, 10010, 9990, 10000), (10000, 10310, 10000, 10300),
                                                              (10300, 10620, 10300, 10600)], start=10)])
     sim = forward.simulate(bars, "2026-10-27 09:09:30", 10000, X.resolve(SCALED), cost_pct=0)
-    assert sim["reason"] == "분할익절 +3% → 목표가" and sim["exit_price"] == pytest.approx(10450)
+    assert sim["reason"] == "분할매도 +3% → 이익실현" and sim["exit_price"] == pytest.approx(10450)
 
 
 # ---------------- 실행 (paper: 즉시 체결) ----------------
@@ -100,7 +100,7 @@ def test_executor_scale_in_then_scale_out_then_target(tmp_path):
     ex.check("A", T0 + timedelta(minutes=5))
     r = store.query("SELECT * FROM plan_trades").iloc[0]
     assert r["status"] == "closed" and broker.position("A") == 0
-    assert r["exit_reason"].startswith("분할익절 +3% → 목표가") and r["exit_price"] == pytest.approx(10250)
+    assert r["exit_reason"].startswith("분할매도 +3% → 이익실현") and r["exit_price"] == pytest.approx(10250)
     fills, sells, pend = book(r.to_dict())
     assert [f["qty"] for f in fills] == [50, 50] and [s["qty"] for s in sells] == [50, 50] and pend is None
 
@@ -147,7 +147,7 @@ def test_emergency_stop_and_flatten_at(tmp_path):
         ex.check(s, T0)
     ex.check("A", T0.replace(hour=15, minute=1))
     assert broker.position("A") == 0 and broker.position("B") == 100
-    assert "시간 일괄청산" in store.query("SELECT exit_reason FROM plan_trades WHERE symbol='A'").iloc[0]["exit_reason"]
+    assert "시간 청산" in store.query("SELECT exit_reason FROM plan_trades WHERE symbol='A'").iloc[0]["exit_reason"]
     set_halt(store, T0.strftime("%Y-%m-%d"), "긴급 정지 (화면)")
     ex.check("B", T0 + timedelta(minutes=1))
     assert broker.position("B") == 0
@@ -242,4 +242,4 @@ def test_daily_backtest_with_scaling(market, cfg):
     r = X.resolve(rules, {"scale_in": [{"pct": 50}, {"pct": 50, "drop_pct": 3}], "scale_out": [{"pct": 50, "gain_pct": 2}]})
     res = backtest.run(store, info, cond, r, days[21], days[-1])
     t = res["table"]
-    assert len(t) >= 1 and t["reason"].str.contains("분할익절").any()
+    assert len(t) >= 1 and t["reason"].str.contains("분할매도").any()

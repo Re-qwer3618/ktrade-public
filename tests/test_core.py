@@ -57,7 +57,7 @@ def test_exit_rules():
         X.resolve({"stop": {"type": "bogus"}})
     with pytest.raises(ValueError):
         X.resolve({"stop": {"type": "none"}, "take_profit": {"type": "r", "value": 2}})
-    assert "손절" in X.describe(ex)
+    assert "손실제한" in X.describe(ex)
 
 
 # ---- 검사 ----
@@ -154,7 +154,7 @@ def test_executor_buy_then_target_from_actual_entry(market, cfg, tmp_path):
     quotes["AAA001"] = {"price": 11450, "open": 11000}
     ex.check("AAA001", datetime.fromisoformat(f"{days[61]}T10:01:00"))
     tr = store.plan_trades().iloc[0]
-    assert tr["status"] == "closed" and "목표가" in tr["exit_reason"]
+    assert tr["status"] == "closed" and "이익실현" in tr["exit_reason"]
 
 
 def test_exit_reason_stop_timing_and_trailing():
@@ -164,15 +164,15 @@ def test_exit_reason_stop_timing_and_trailing():
     def t(hm):
         return datetime.fromisoformat(f"2025-03-28T{hm}:00")
     assert exit_reason(trade, plan, 9200, t("10:00"), "2025-03-28")[0] == ""           # close 모드: 장중엔 손절 안 함
-    assert "손절" in exit_reason(trade, plan, 9200, t("15:11"), "2025-03-28")[0]
+    assert "손실제한" in exit_reason(trade, plan, 9200, t("15:11"), "2025-03-28")[0]
     plan_i = {"exits": X.resolve({"stop_check": "intraday"}), "max_hold_days": 10}
-    assert "손절" in exit_reason(trade, plan_i, 9290, t("10:00"), "2025-03-28")[0]
+    assert "손실제한" in exit_reason(trade, plan_i, 9290, t("10:00"), "2025-03-28")[0]
     plan_t = {"exits": X.resolve({"take_profit": {"type": "none"}, "trailing": {"activate_pct": 5, "trail_pct": 4}}),
               "max_hold_days": 10}
     r, peak = exit_reason(trade, plan_t, 11000, t("10:00"), "2025-03-28")
     assert r == "" and peak == 11000
     r, _ = exit_reason({**trade, "peak": 11000}, plan_t, 10500, t("10:05"), "2025-03-28")
-    assert "추적 손절" in r                                                              # 11000 × 0.96 = 10560
+    assert "트레일링스탑" in r                                                              # 11000 × 0.96 = 10560
 
 
 def test_executor_skips_when_open_below(market, cfg, tmp_path):
@@ -198,7 +198,7 @@ def test_backtest_condition(market, cfg):
     # 청산 규칙만 바꿔 같은 조건을 다시 실험: 익절 +5% → 목표가로 청산
     r5 = X.resolve({"take_profit": {"type": "pct", "value": 5}})
     res5 = backtest.run(store, info, cond, r5, days[21], days[-1], cost_pct=0.0)
-    assert res5["table"].iloc[0]["reason"] == "목표가"
+    assert res5["table"].iloc[0]["reason"] == "이익실현"
 
 
 def test_simulate_is_conservative_when_stop_and_target_same_day(market):
@@ -206,7 +206,7 @@ def test_simulate_is_conservative_when_stop_and_target_same_day(market):
     ex = X.resolve({"stop": {"type": "pct", "value": 0.1}, "take_profit": {"type": "pct", "value": 0.1}, "stop_check": "intraday"})
     pl = Plan("AAA001", Entry.confirm(10300, 10), None, None, exits=ex)
     res = backtest.simulate(store, pl, days[59], 0.0)                 # 다음 날 저가(-0.2%)·고가(+1.8%)가 ±0.1%를 둘 다 넘음
-    assert res["reason"] == "손절"
+    assert res["reason"] == "손실제한"
 
 
 def test_wilson_interval():
@@ -259,19 +259,32 @@ def test_live_refuses_real_account_without_confirm(cfg):
         live.run(cfg, once=True)
 
 
-def test_planner_hts_filter_keeps_only_condition_matches(market, cfg):
-    """매매조건 + 영웅문 조건식 조합: 조건식에도 걸린 종목만 계획, 조회 실패면 그 조건은 계획 없음."""
-    store, days = market
-    cfg["strategies"]["require_backtest"] = False
-    cfg["strategies"]["enabled"][0]["hts_filter"] = "내조건식"
-    base = planner.run_plans(cfg, store, days[59], hts_scan=lambda n: {"AAA001", "BBB002", "CCC003"})
-    assert base["strategies"] == {"example_breakout": 1}
-    res = planner.run_plans(cfg, store, days[59], hts_scan=lambda n: set())
-    assert res["strategies"] == {"example_breakout": 0}
-    rej = json.loads((paths(cfg)["plans"] / days[59] / "_rejected.json").read_text(encoding="utf-8"))
-    assert any("영웅문 조건식 '내조건식'에 없음" in r["reason"] for r in rej["rejected"])
 
-    def boom(n):
-        raise RuntimeError("연결 끊김")
-    res = planner.run_plans(cfg, store, days[59], hts_scan=boom)
-    assert "example_breakout" not in res["strategies"] and "조회 실패" in res["errors"]["example_breakout"]
+def test_screen_spec_filters_stored_daily(market):
+    """자연어 검색의 계산 쪽: spec(JSON) → 받아 둔 일봉에 적용. AI가 만든 코드는 실행하지 않는다."""
+    from ktrade.engine import screen
+    store, days = market
+    asof = days[-1]
+    allrows = screen.run(store, {"rules": [], "limit": 999, "exclude_kinds": False}, asof)
+    assert len(allrows) > 0 and {"종목코드", "종목명", "현재가"} <= set(allrows.columns)
+    bars = store.market.daily_between(days[-6], asof, None)
+    chg = {s: (g["close"].iloc[-1] / g["close"].iloc[0] - 1) * 100 for s, g in bars.groupby("symbol")}
+    up = screen.run(store, {"rules": [{"type": "change", "days": 5, "min": 0}], "limit": 999, "exclude_kinds": False,
+                            "sort": {"by": "change", "days": 5}}, asof)
+    assert set(up["종목코드"]) == {s for s, v in chg.items() if v >= 0}
+    assert list(up["5일 등락률%"]) == sorted(up["5일 등락률%"], reverse=True)
+    assert screen.run(store, {"price": {"min": 10**9}, "exclude_kinds": False}, asof).empty
+    with pytest.raises(ValueError):
+        screen.run(store, {"rules": [{"type": "뉴스"}]}, asof)
+
+
+def test_ai_parse_json_and_skill(tmp_path):
+    from ktrade import ai
+    assert ai.parse_json('설명\n```json\n{"rules": [], // 주석\n "limit": 5}\n```')["limit"] == 5
+    (tmp_path / "references").mkdir()
+    (tmp_path / "SKILL.md").write_text("# 차트 심리", encoding="utf-8")
+    (tmp_path / "references" / "a.md").write_text("매물대", encoding="utf-8")
+    text, used = ai.skill_text({"ai": {"skill_dir": str(tmp_path)}})
+    assert used == ["SKILL.md", "references/a.md"] and "매물대" in text
+    assert "개인 분석 스킬" in ai.stock_system({"ai": {"skill_dir": str(tmp_path)}})
+    assert ai.stock_system({}) == ai.STOCK_SYSTEM

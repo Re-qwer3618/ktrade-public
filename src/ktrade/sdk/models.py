@@ -64,6 +64,7 @@ class Plan:
     reason: str = ""
     meta: dict[str, Any] = field(default_factory=dict)
     exits: dict[str, Any] = field(default_factory=dict)  # 실행에 필요한 청산 설정 (trailing, stop_check …)
+    intraday: dict[str, Any] = field(default_factory=dict)  # 장중 조건 {id, params} — 있으면 매수 시점은 장중 조건이 정함(Entry는 무시)
 
     def to_dict(self, strategy_id: str, version: str, asof: str) -> dict:
         d = asdict(self)
@@ -80,7 +81,7 @@ class Plan:
                     name=d.get("name", ""), market=d.get("market", ""), rank=d.get("rank"),
                     reason=d.get("basis") or d.get("reason", ""),
                     meta={k: v for k, v in d.items() if k in ("conditions", "metrics", "zone")} | (d.get("meta") or {}),
-                    exits=d.get("exits") or {})
+                    exits=d.get("exits") or {}, intraday=d.get("intraday") or {})
 
 
 def plan_id(strategy_id: str, version: str, asof: str, symbol: str) -> str:

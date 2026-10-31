@@ -20,11 +20,24 @@ from ktrade.engine import exits as X
 
 KEYS = ("trades", "win_rate", "win_rate_ci95", "avg_ret", "avg_ret_ci95", "median_ret", "avg_win", "avg_loss", "profit_factor",
         "max_consec_losses", "max_drawdown_pct_pts", "avg_excess", "avg_days", "picks", "triggered", "trigger_rate",
-        "in_sample", "out_of_sample", "consistent", "by_reason", "by_year", "start", "end", "days", "cost_pct", "still_open", "universe")
+        "in_sample", "out_of_sample", "consistent", "by_reason", "by_year", "start", "end", "days", "cost_pct", "still_open", "universe", "no_minutes")
 
 
-def setup_hash(info, params: dict, rules: dict) -> str:
-    blob = json.dumps({"code": info.code_hash, "params": params, "exits": rules}, sort_keys=True, ensure_ascii=False, default=str)
+def intraday_key(found: dict, item: dict | None) -> dict | None:
+    """계획에 붙인 장중 조건 → 지문용 {id, code, params} (없으면 None)."""
+    iq = (item or {}).get("intraday")
+    if not iq:
+        return None
+    iq = iq if isinstance(iq, dict) else {"id": str(iq)}
+    info = found.get(iq["id"])
+    return {"id": iq["id"], "code": info.code_hash if info else "?", "params": {**(info.params if info else {}), **(iq.get("params") or {})}}
+
+
+def setup_hash(info, params: dict, rules: dict, intraday: dict | None = None) -> str:
+    d = {"code": info.code_hash, "params": params, "exits": rules}
+    if intraday:
+        d["intraday"] = intraday
+    blob = json.dumps(d, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(blob.encode()).hexdigest()[:10]
 
 
@@ -32,13 +45,14 @@ def _dir(cfg: dict, sid: str) -> Path:
     return paths(cfg)["home"] / "experiments" / sid
 
 
-def save(cfg: dict, info, params: dict, rules: dict, result: dict, note: str = "") -> Path:
+def save(cfg: dict, info, params: dict, rules: dict, result: dict, note: str = "", intraday: dict | None = None) -> Path:
     d = _dir(cfg, info.id)
     d.mkdir(parents=True, exist_ok=True)
-    setup = setup_hash(info, params, rules)
+    setup = setup_hash(info, params, rules, intraday)
     run_at = datetime.now().strftime("%Y%m%d-%H%M%S")
     rec = {"id": info.id, "version": info.version, "code_hash": info.code_hash, "setup": setup, "run_at": run_at,
            "params": params, "exits": X.describe(rules), "exits_raw": rules, "note": note,
+           "intraday": intraday["id"] if intraday else "",
            **{k: result[k] for k in KEYS if k in result}}
     path = d / f"{run_at}_{setup}.json"
     path.write_text(json.dumps(rec, ensure_ascii=False, indent=1, default=str), encoding="utf-8")

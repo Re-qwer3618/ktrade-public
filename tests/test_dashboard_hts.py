@@ -28,7 +28,7 @@ def test_hts_tab_renders(home, monkeypatch):
     at = AppTest.from_file(str(APP), default_timeout=60).run()
     assert not at.exception, at.exception
     tabs = [t.label for t in at.tabs]
-    assert "🔎 영웅문 조건식" in tabs
+    assert "🔎 조건검색 · 차트" in tabs
     text = " ".join(str(m.value) for m in at.markdown) + " ".join(str(s.value) for s in at.subheader)
     assert "단타전략-2" in text
     metrics = {m.label: m.value for m in at.metric}

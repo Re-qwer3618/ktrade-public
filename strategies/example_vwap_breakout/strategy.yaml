@@ -1,0 +1,13 @@
+id: example_vwap_breakout
+version: v1
+kind: intraday             # 장중 매수 판단 (장 마감 후 종목 선정은 kind: condition)
+entry: strategy.py:VwapBreakout
+description: 예제 장중 조건 — VWAP 위에서 거래량이 몰리며 직전 5분 고가를 넘으면 매수 신호 (교육용, 수익 보장 없음)
+author: ktrade
+params:
+  start: "09:05"           # 이 시각부터
+  end: "14:30"             # 이 시각까지만 신호
+  lookback: 5              # 직전 N분 고가 돌파
+  vol_mult: 2.0            # 지금 1분 거래량이 직전 N분 평균의 이 배수 이상
+  above_vwap: true         # VWAP 위에서만
+  chase_pct: 1.0           # 신호 가격 +1%보다 비싸면 사지 않음

@@ -104,7 +104,7 @@ def test_dashboard_tabs_by_access(home, monkeypatch):
     at = AppTest.from_file(str(APP), default_timeout=60).run()                 # 코드 없음 → 기본 기능 + 체험판
     assert not at.exception, at.exception
     tabs = [t.label for t in at.tabs]
-    assert tabs[0] == "🕹️ 운영" and "🧪 백테스트 체험판" in tabs and "🛠️ 관리자" not in tabs
+    assert tabs[0] == "🕹️ 자동매매" and "🧪 백테스트 체험판" in tabs and "🛠️ 관리자" not in tabs
     assert any(b.label == "🔓 백테스트 정식판 로그인" for b in at.sidebar.button)
 
 
@@ -122,8 +122,8 @@ def test_dashboard_without_chart_data(home, monkeypatch):
     at = AppTest.from_file(str(APP), default_timeout=60).run()
     assert not at.exception, at.exception
     tabs = [t.label for t in at.tabs]
-    assert tabs[0] == "🕹️ 운영" and "🗓️ 계획" in tabs
-    assert any(m.label == "마지막 일봉" and m.value == "받지 않음 (선택)" for m in at.metric)
+    assert tabs[0] == "🕹️ 자동매매" and "🗓️ 매매계획" in tabs
+    assert any(m.label == "최근 일봉" and m.value == "받지 않음 (선택)" for m in at.metric)
 
 
 def test_ai_access_and_parsing(monkeypatch):

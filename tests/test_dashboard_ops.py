@@ -100,7 +100,7 @@ def test_status_and_tables(tmp_path, cfg):
     assert dict(zip(ins["종목"], ins["상태"])) == {"A": "편입 중", "B": "이탈"}
     assert ins.set_index("종목").loc["B", "판단"] == "SKIP"
     h = ops.holdings(store)
-    assert h.iloc[0]["종목"] == "A" and h.iloc[0]["보유"] == 100 and h.iloc[0]["평균가"] == 10000
+    assert h.iloc[0]["종목"] == "A" and h.iloc[0]["잔고수량"] == 100 and h.iloc[0]["매입가"] == 10000
     assert ops.pending(store, NOW).empty
     f = ops.executions(store, DAY)
     assert f.iloc[0]["구분"] == "매수" and f.iloc[0]["수량"] == 100
@@ -143,11 +143,11 @@ def test_ops_tab_renders_and_saves(home):
     _filled_store(home / "data", "market.db")
     at = AppTest.from_file(str(APP), default_timeout=60).run()
     assert not at.exception, at.exception
-    assert [t.label for t in at.tabs][0] == "🕹️ 운영"
+    assert [t.label for t in at.tabs][0] == "🕹️ 자동매매"
     labels = [m.label for m in at.metric]
-    assert "오늘 손익 (원)" in labels
+    assert "당일 손익 (원)" in labels
     nums = {n.label: n for n in at.number_input}
-    nums["하루 손실 한도 (원)"].set_value(150000)
+    nums["당일 손실한도 (원)"].set_value(150000)
     next(b for b in at.button if b.label == "설정 저장").click()
     at.run()
     assert not at.exception, at.exception

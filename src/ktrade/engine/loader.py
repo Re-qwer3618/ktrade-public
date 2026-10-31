@@ -25,6 +25,9 @@ import yaml
 
 from ktrade.config import paths
 from ktrade.sdk.condition import Condition
+from ktrade.sdk.intraday import Intraday
+
+KINDS = ("condition", "intraday")   # 장 마감 후 종목 선정 | 장중 매수 판단
 
 
 @dataclass
@@ -76,12 +79,12 @@ def _from_folder(folder: Path) -> StrategyInfo | None:
     for key in ("id", "entry"):
         if not m.get(key):
             raise ValueError(f"{mf}: '{key}'가 없습니다")
-    if m.get("kind", "condition") != "condition":
-        raise ValueError(f"kind는 condition만 지원합니다 (받은 값 {m.get('kind')}) — 0.3 이하의 plan/signal 전략은 "
-                         "Condition.select()로 옮기세요: 손절·익절 코드는 지우고 exits 설정으로 (docs/CONDITION_GUIDE.md)")
+    if m.get("kind", "condition") not in KINDS:
+        raise ValueError(f"kind는 condition(장 마감 후 종목 선정) 또는 intraday(장중 매수 판단) (받은 값 {m.get('kind')}) — "
+                         "0.3 이하의 plan/signal 전략은 Condition.select()로 옮기세요 (docs/CONDITION_GUIDE.md)")
     return StrategyInfo(id=m["id"], version=str(m.get("version", "v1")), description=m.get("description", ""),
                         author=m.get("author", ""), source=str(folder), params=m.get("params") or {}, entry=m["entry"],
-                        exits=m.get("exits") or {}, code_hash=folder_hash(folder))
+                        exits=m.get("exits") or {}, code_hash=folder_hash(folder), kind=m.get("kind", "condition"))
 
 
 INVALID: dict[str, str] = {}   # 마지막 discover에서 무시한 폴더 → 사유 (ktrade strategies·doctor가 보여 줌)
@@ -112,7 +115,8 @@ def discover(cfg: dict) -> dict[str, StrategyInfo]:
             found[cls.id] = StrategyInfo(id=cls.id, version=cls.version, description=cls.description, author="",
                                          source=f"entry-point:{ep.value}", params=dict(cls.default_params),
                                          exits=dict(getattr(cls, "exits", {}) or {}),
-                                         code_hash=hashlib.sha256(src).hexdigest()[:12], cls=cls)
+                                         code_hash=hashlib.sha256(src).hexdigest()[:12], cls=cls,
+                                         kind=getattr(cls, "kind", "condition"))
     return found
 
 
@@ -129,12 +133,17 @@ def _load_class(info: StrategyInfo) -> type:
     sys.modules[mod_name] = mod
     spec.loader.exec_module(mod)
     cls = getattr(mod, clsname)
-    if not (isinstance(cls, type) and issubclass(cls, Condition)):
-        raise TypeError(f"{info.id}: {clsname}는 ktrade.sdk.Condition을 상속해야 합니다")
+    base = Intraday if info.kind == "intraday" else Condition
+    if not (isinstance(cls, type) and issubclass(cls, base)):
+        raise TypeError(f"{info.id}: {clsname}는 ktrade.sdk.{base.__name__}을 상속해야 합니다")
     return cls
 
 
-def load(info: StrategyInfo, params: dict | None = None) -> Condition:
+def of_kind(found: dict[str, StrategyInfo], kind: str) -> dict[str, StrategyInfo]:
+    return {k: v for k, v in found.items() if v.kind == kind}
+
+
+def load(info: StrategyInfo, params: dict | None = None) -> Condition | Intraday:
     cls = _load_class(info)
     cls.id, cls.version = info.id, info.version
     return cls({**info.params, **(params or {})})
@@ -155,5 +164,7 @@ def enabled(cfg: dict) -> list[tuple[StrategyInfo, Condition, dict]]:
         if sid not in found:
             raise KeyError(f"설정에 켠 매매조건 '{sid}'를 찾지 못했습니다 (ktrade strategies로 목록 확인)")
         info = found[sid]
+        if info.kind != "condition":
+            raise KeyError(f"'{sid}'는 장중 조건입니다 — 계획에 쓸 매매조건(장 마감 후 종목 선정)에 장중 조건으로 붙이세요")
         out.append((info, load(info, item.get("params")), exits_for(cfg, info, item.get("exits"))))
     return out

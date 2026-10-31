@@ -9,7 +9,11 @@
 
 ## AI에게: 당신이 할 일
 
-당신은 ktrade용 **매매조건 플러그인**을 작성한다. 매매조건 = **종목 선정 + 매수 타이밍** 두 가지뿐이다.
+당신은 ktrade용 조건 플러그인을 작성한다. 종류는 두 가지이고, 요청 양식에 어느 쪽인지 적혀 있다.
+- **매매조건 (kind: condition)** — 장 마감 후 하루 한 번 종목 선정 + 다음 날 매수 타이밍. 아래 '매매조건' 절.
+- **장중 조건 (kind: intraday)** — 장중에 '지금 사도 되나' 판단. 문서 끝 '장중 조건' 절.
+
+아래는 매매조건 설명이다. 매매조건 = **종목 선정 + 매수 타이밍** 두 가지뿐이다.
 **손절·이익실현·보유기간은 쓰지 않는다** — 엔진이 사용자 설정(exits)으로 처리하고, 실전과 백테스트에서 똑같이 적용한다.
 
 출력은 두 파일뿐이다.
@@ -161,3 +165,76 @@ class Breakout(Condition):
 
 받은 뒤: `ktrade test <id>` → 오류가 나면 출력 그대로 AI에게 보여 주고 고치게 → 통과하면 결과(승률·95% 구간·앞뒤 기간 일관성)를 보고
 `~/.ktrade/config.yaml` `strategies.enabled`에 추가 → 먼저 paper/모의투자로 운영. 조건을 바꿀 때마다 `ktrade test`를 다시 돌린다.
+
+---
+
+## 장중 조건 (kind: intraday)
+
+장중에 **"지금 이 종목을 사도 되나"** 만 판단한다. 종목은 엔진이 넘겨준다(조건검색 편입 종목, 또는 장 마감 후 매매조건이 고른 감시 목록).
+쓰이는 곳 두 가지 — 같은 코드를 그대로 쓴다:
+1. **조건검색 편입 확인**: 영웅문 조건식이 종목을 편입하면, 사기 전에 이 조건으로 한 번 더 확인 (`ctx.event == "insert"`, `ctx.insert_price` = 편입가)
+2. **감시 목록 장중 신호**: 매매조건이 고른 종목을 다음 날 장중에 지켜보다 이 조건이 맞으면 매수 (`ctx.event == "watch"`). 매매조건의 Entry는 무시된다
+
+데이터: 실전은 **키움 실시간 데이터**(현재가·오늘 1분봉·일봉 조회), 백테스트는 받아 둔 1분봉. 미래 데이터는 없다.
+
+```yaml
+id: my_intraday
+version: v1
+kind: intraday
+entry: strategy.py:MyIntraday
+description: 한 줄 설명
+params: {}
+```
+
+```python
+from ktrade.sdk import Intraday, Signal
+
+
+class MyIntraday(Intraday):
+    default_params = {"start": "09:05", "end": "14:30", "lookback": 5, "vol_mult": 2.0}
+
+    def check(self, ctx):
+        p = self.params
+        m = ctx.minutes                      # 오늘 1분봉(지금까지), 열 open high low close volume, 인덱스 시각
+        # ── 시간대 ──
+        if not (p["start"] <= ctx.now.strftime("%H:%M") <= p["end"]) or len(m) < p["lookback"] + 1:
+            return None
+        # ── 판단 ──
+        prev = m.iloc[-(p["lookback"] + 1):-1]
+        vwap = ctx.vwap()
+        if vwap and ctx.price > vwap and ctx.price > prev["high"].max() \
+                and m["volume"].iloc[-1] >= prev["volume"].mean() * p["vol_mult"]:
+            return Signal.yes(f"VWAP {vwap:,.0f} 위 · {p['lookback']}분 고가 돌파", max_price=round(ctx.price * 1.01, 2))
+        return None
+```
+
+ctx (IntradayContext):
+| 이름 | 뜻 |
+|---|---|
+| `ctx.price` | 지금 가격 (실전 키움 현재가 / 백테스트 그 분봉 종가) |
+| `ctx.minutes` | 오늘 1분봉 DataFrame (지금까지만, 오래된 → 최근) |
+| `ctx.daily` | 어제까지 일봉 DataFrame (최근 300개, 수정주가) |
+| `ctx.now` | 지금 시각 (datetime) |
+| `ctx.vwap()` | 오늘 거래량 가중 평균가 (분봉 없으면 None) |
+| `ctx.day_open` · `ctx.day_high` · `ctx.prev_close` | 오늘 시가·고가, 어제 종가 |
+| `ctx.event` · `ctx.insert_price` | "insert"(편입 확인) 또는 "watch"(감시 목록) · 편입가 |
+| `ctx.symbol` · `ctx.name` · `ctx.params` | 종목코드·이름·파라미터 |
+
+돌려주는 값: 살 때 `Signal.yes("이유", max_price=추격 상한)`, 아니면 `None`.
+지킬 것: 매매조건과 같음(import 제한, 손실제한·이익실현 코드 금지). **가볍게** — 장중에 종목마다 자주 부른다(분봉 수백 개 계산 정도까지).
+분봉이 적은 장 초반(`len(ctx.minutes)`가 작을 때)은 None을 돌려준다. 숫자 기준은 `default_params`에.
+
+## 요청 양식 — 장중 조건 (사용자가 채워서 보냄)
+
+```
+위 ktrade 규격의 '장중 조건(kind: intraday)'으로 strategy.yaml, strategy.py 두 파일을 써 줘. 손실제한·이익실현 코드는 쓰지 마.
+
+- 조건 id: (예: vwap_pullback)
+- 쓰는 곳: (조건검색 편입 확인 / 감시 목록 장중 신호 / 둘 다)
+- 매수 판단: (예: VWAP 위에 있고, 직전 10분 고가를 거래량 2배 이상으로 돌파하면. 편입 확인일 때는 편입가보다 1% 넘게 오른 상태면 사지 않음)
+- 시간대: (예: 09:05 ~ 14:30)
+- 추격 상한: (예: 신호 가격 +1%)
+```
+
+받은 뒤: `~/.ktrade/strategies/<id>/`에 저장 → `ktrade validate <id>` → 대시보드 자동매매 탭 조건식의 **파이썬 확인**, 또는 백테스트 정식판
+'계획에 쓸 매매조건'의 **장중 조건**으로 붙인다. 성적은 백테스트 정식판 '장중 조건' 탭(조건식 편입 + 파이썬 확인)과 '실험'(매매조건 + 장중 조건).

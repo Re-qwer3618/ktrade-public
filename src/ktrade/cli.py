@@ -43,6 +43,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -105,6 +106,68 @@ params: {{}}          # 기본값은 strategy.py의 default_params. 여기나 co
 #   take_profit: {{type: r, value: 2}}
 #   max_hold_days: 10
 """
+
+_INTRADAY_TEMPLATE = '''\
+"""장중 조건 __ID__ — 장중에 '지금 사도 되나'를 판단한다. 고칠 곳은 아래 '── 1)'~'── 3)' 세 군데.
+
+쓰는 곳: ① 자동매매 탭 조건식의 '파이썬 확인' (조건검색 편입 종목을 사기 전에 한 번 더)
+        ② 백테스트 정식판 '계획에 쓸 매매조건'의 '장중 조건' (장 마감 후 고른 감시 목록을 장중에 지켜보다 매수)
+데이터(ctx) — 실전은 키움 실시간, 백테스트는 받아 둔 1분봉:
+  ctx.price 지금 가격 · ctx.minutes 오늘 1분봉(지금까지) · ctx.daily 어제까지 일봉 · ctx.now 지금 시각
+  ctx.vwap() · ctx.day_open · ctx.day_high · ctx.prev_close · ctx.event('insert'|'watch') · ctx.insert_price(편입가)
+돌려주는 값: 살 때 Signal.yes("이유", max_price=추격 상한), 아니면 None. 이익실현·손실제한은 쓰지 않는다(엔진 설정).
+AI에게 맡기려면 ~/.ktrade/docs/LLM_CONTEXT.md 를 붙여 넣고 '장중 조건' 요청 양식을 채우세요.
+"""
+from ktrade.sdk import Intraday, Signal
+
+
+class MyIntraday(Intraday):
+    default_params = {"start": "09:05", "end": "14:30", "lookback": 5, "vol_mult": 2.0}
+
+    def check(self, ctx):
+        p = self.params
+        n = int(p["lookback"])
+        m = ctx.minutes
+        # ── 1) 시간대 ──
+        if not (p["start"] <= ctx.now.strftime("%H:%M") <= p["end"]) or len(m) < n + 1:
+            return None
+        # ── 2) 조건: 예) VWAP 위 + 거래량이 직전 n분 평균의 vol_mult배 ──
+        vwap = ctx.vwap()
+        prev = m.iloc[-(n + 1):-1]
+        if vwap is None or ctx.price < vwap or m["volume"].iloc[-1] < prev["volume"].mean() * p["vol_mult"]:
+            return None
+        # ── 3) 신호: 직전 n분 고가를 넘으면 산다 (추격 상한 +1%) ──
+        if ctx.price > prev["high"].max():
+            return Signal.yes(f"VWAP {vwap:,.0f} 위 · {n}분 고가 돌파", max_price=round(ctx.price * 1.01, 2))
+        return None
+'''
+
+_INTRADAY_MANIFEST = """id: __ID__
+version: v1
+kind: intraday
+entry: strategy.py:MyIntraday
+description: 내 장중 조건 설명
+author: ""
+params: {}          # 기본값은 strategy.py의 default_params
+"""
+
+
+def new_condition(dest_dir: Path, sid: str, kind: str = "condition") -> Path:
+    """양식으로 새 조건 폴더 만들기 — kind: condition(장 마감 후 종목 선정) | intraday(장중 매수 판단)."""
+    if not re.fullmatch(r"[a-z][a-z0-9_]{1,39}", sid or ""):
+        raise ValueError("조건 id는 영문 소문자로 시작, 소문자·숫자·_ 2~40자")
+    d = dest_dir / sid
+    if d.exists():
+        raise ValueError(f"이미 있습니다: {d}")
+    d.mkdir(parents=True)
+    if kind == "intraday":
+        (d / "strategy.yaml").write_text(_INTRADAY_MANIFEST.replace("__ID__", sid), encoding="utf-8")
+        (d / "strategy.py").write_text(_INTRADAY_TEMPLATE.replace("__ID__", sid), encoding="utf-8")
+    else:
+        (d / "strategy.yaml").write_text(_MANIFEST.format(id=sid), encoding="utf-8")
+        (d / "strategy.py").write_text(_TEMPLATE.format(id=sid), encoding="utf-8")
+    return d
+
 
 _STRATEGIES_README = """# 내 매매조건 폴더
 
@@ -277,6 +340,10 @@ def cmd_strategies(a) -> None:
     on = {(e["id"] if isinstance(e, dict) else e): (e if isinstance(e, dict) else {}) for e in cfg["strategies"]["enabled"]}
     for sid, info in loader.discover(cfg).items():
         item = on.get(sid, {})
+        if info.kind == "intraday":
+            print(f"{'장중':2} {sid:22} {info.version:4} [장중 매수 판단 — 파이썬 확인·장중 조건으로 붙여 씀]\n"
+                  f"     {info.description[:70]}  ({info.source})")
+            continue
         try:
             from ktrade.engine import exits as X
             rules = loader.exits_for(cfg, info, item.get("exits"))
@@ -294,14 +361,17 @@ def cmd_strategies(a) -> None:
 
 
 def cmd_new(a) -> None:
-    d = paths(_cfg())["strategies"] / a.id
-    if d.exists():
-        sys.exit(f"이미 있습니다: {d}")
-    d.mkdir(parents=True)
-    (d / "strategy.yaml").write_text(_MANIFEST.format(id=a.id), encoding="utf-8")
-    (d / "strategy.py").write_text(_TEMPLATE.format(id=a.id), encoding="utf-8")
-    print(f"만들었습니다: {d}\n  1) strategy.py 에서 '종목 선정'과 '매수 타이밍' 두 곳을 고치고\n"
-          f"  2) ktrade test {a.id}\n  3) config.yaml strategies.enabled 에 '- id: {a.id}' 추가")
+    kind = "intraday" if a.intraday else "condition"
+    try:
+        d = new_condition(paths(_cfg())["strategies"], a.id, kind)
+    except ValueError as exc:
+        sys.exit(str(exc))
+    if kind == "intraday":
+        print(f"만들었습니다(장중 조건): {d}\n  1) strategy.py 의 '── 1)~3)' 을 고치고\n  2) ktrade validate {a.id}\n"
+              "  3) 자동매매 탭 조건식의 '파이썬 확인' 또는 백테스트 정식판 '계획에 쓸 매매조건'의 '장중 조건'으로 붙이기")
+    else:
+        print(f"만들었습니다: {d}\n  1) strategy.py 에서 '종목 선정'과 '매수 타이밍' 두 곳을 고치고\n"
+              f"  2) ktrade test {a.id}\n  3) config.yaml strategies.enabled 에 '- id: {a.id}' 추가")
 
 
 def cmd_validate(a) -> None:
@@ -426,6 +496,9 @@ def cmd_test(a) -> None:
     print(rep.render().replace("다음: ktrade test <조건>  (검사 + 백테스트 + 이전 실험과 비교)", ""))
     if not rep.ok:
         sys.exit(1)
+    if "장중 조건(intraday)" in rep.render():
+        sys.exit("장중 조건은 혼자 백테스트하지 않습니다 — 대시보드 백테스트 정식판에서 매매조건에 붙여 실험하거나 "
+                 "'장중 조건' 탭의 조건식 편입 성적으로 보세요.")
     res, prev, path = _run_backtest(cfg, a.id, a.start, a.end, _json(a.params), _json(a.exits), a.note or "",
                                     a.symbols, a.symbols_file)
     _print_result(res)
@@ -707,7 +780,13 @@ def _hts_watch(a, cfg: dict, server: str) -> None:
     print(f"조건식 실시간 ({server} 서버) — {', '.join(names)} · {until}까지 (Ctrl+C로 끝) · {trading}")
     print("  같은 키로 실시간 시세·조건검색을 쓰는 다른 프로그램이 켜져 있으면 서로 끊깁니다(계정당 웹소켓 하나).")
     stream = ConditionStream(cfg, names).start()
-    book = SignalBook(store, conds, price, executor=executor, allow_trade=executor is not None, no_trade_reason=how)
+    confirm = None
+    if any(c.get("confirm") for c in conds):          # 편입 뒤 파이썬 확인 — 키움 실시간 분봉·일봉으로
+        from ktrade.data.kiwoom import KiwoomData
+        from ktrade.engine.intraday import KiwoomSource, Runner
+        confirm = Runner(cfg, KiwoomSource(KiwoomData(cfg)))
+    book = SignalBook(store, conds, price, executor=executor, allow_trade=executor is not None, no_trade_reason=how,
+                      confirm=confirm)
     started = datetime.now()
     last_check: dict[str, float] = {}
     last_guard = 0.0
@@ -1030,7 +1109,8 @@ def main(argv: list[str] | None = None) -> None:
         (("--role",), {"choices": ["backtest", "admin"], "default": "backtest"}),
         (("--days",), {"type": int, "default": 365, "help": "유효 기간(일). 0 = 만료 없음"}), (("--note",), {}))
     add("strategies", cmd_strategies, aliases=("conditions",))
-    add("new", cmd_new, (("id",), {}), aliases=("new-condition", "new-strategy"))
+    add("new", cmd_new, (("id",), {}), (("--intraday",), {"action": "store_true", "help": "장중 조건(장중 매수 판단) 양식"}),
+        aliases=("new-condition", "new-strategy"))
     add("validate", cmd_validate, (("id",), {}), (("--asof",), {}), (("--params",), {}))
     add("test", cmd_test, (("id",), {}), *bt_args)
     add("backtest", cmd_backtest, (("id",), {}), *bt_args)

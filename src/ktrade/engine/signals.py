@@ -50,12 +50,8 @@ def cond_exits(c: dict) -> dict:
     return X.resolve(HTS_EXITS, ex)
 
 
-MAX_REALTIME = 10                   # 키움 실시간 조건검색 동시 등록 한도
-
-
 def load_conditions(cfg: dict, names: list[str] | None = None) -> list[dict]:
-    """config.yaml hts_conditions(+기본값) + forward_test(체험판 조건식 테스트, 관찰로). names를 주면 그 조건식만 —
-    config에 없는 이름은 기본값(관찰)으로."""
+    """config.yaml hts_conditions(+기본값). names를 주면 그 조건식만 — config에 없는 이름은 기본값(관찰)으로."""
     conf = {}
     for item in cfg.get("hts_conditions") or []:
         item = {"name": item} if isinstance(item, str) else dict(item)
@@ -64,8 +60,6 @@ def load_conditions(cfg: dict, names: list[str] | None = None) -> list[dict]:
         merged = copy.deepcopy(DEFAULT_COND)
         merged.update(item)
         conf.setdefault(str(item["name"]), merged)  # 이름이 겹치면 앞(새로 저장한) 것 — 예전 저장 버그로 뒤에 묵은 항목이 남은 파일 대비
-    for name in cfg.get("forward_test") or []:     # 운영에 없는 테스트용 조건식은 관찰만 (신호 일지 → 성적표)
-        conf.setdefault(str(name), {**copy.deepcopy(DEFAULT_COND), "name": str(name), "mode": "watch"})
     if names:
         return [conf.get(n) or {**copy.deepcopy(DEFAULT_COND), "name": n} for n in names]
     return list(conf.values())
@@ -86,8 +80,10 @@ class SignalBook:
     """이벤트(insert/remove/init) → 판단·기록. price_fn(symbol) → 현재가 또는 None. 조건식 이름은 stream이 찾은 실제 이름."""
 
     def __init__(self, store: Store, conds: list[dict], price_fn: Callable[[str], float | None],
-                 price_wait_sec: float = 5.0, executor=None, allow_trade: bool = False, no_trade_reason: str = ""):
+                 price_wait_sec: float = 5.0, executor=None, allow_trade: bool = False, no_trade_reason: str = "",
+                 confirm=None):
         self.store, self.price_fn, self.price_wait = store, price_fn, timedelta(seconds=price_wait_sec)
+        self.confirm = confirm              # engine.intraday.Runner — 조건식의 '파이썬 확인'(confirm: 장중 조건 id)
         self.conds = {c["name"]: c for c in conds}
         self.pending: dict[tuple[str, str], _Pending] = {}
         self.executor, self.allow_trade, self.no_trade_reason = executor, allow_trade, no_trade_reason
@@ -219,6 +215,20 @@ class SignalBook:
             return self._record(name, p.seq, p.symbol, "I", "SKIP", f"추격 한도 — 편입가 {p.insert_price:,.0f} 대비 "
                                 f"+{(price / p.insert_price - 1) * 100:.1f}% (> {c['chase_pct']}%)", price, p.event_time, now)
         how = "즉시" if not float(c.get("confirm_sec") or 0) else f"{float(c['confirm_sec']):.0f}초 확인 후"
+        cf = c.get("confirm")
+        if cf:                              # 편입 뒤 내 파이썬 조건으로 한 번 더 (키움 실시간 분봉·일봉)
+            cf = cf if isinstance(cf, dict) else {"id": str(cf)}
+            if self.confirm is None:
+                return self._record(name, p.seq, p.symbol, "I", "SKIP", f"파이썬 확인 '{cf['id']}' 실행기 없음", price,
+                                    p.event_time, now)
+            ok, why, cap = self.confirm.check(cf["id"], cf.get("params"), p.symbol, now, price, event="insert",
+                                              insert_price=p.insert_price)
+            if not ok:
+                return self._record(name, p.seq, p.symbol, "I", "SKIP", f"파이썬 확인 '{cf['id']}' 불통과 — {why}", price,
+                                    p.event_time, now)
+            if cap:
+                limit = min(limit, cap)
+            how += f", 파이썬 확인 '{cf['id']}' 통과({why})"
         if self.trading(c):
             return self._buy(p, price, limit, how, now)
         why = "관찰 모드라 주문 없음" if c["mode"] != "trade" else f"매매 설정이지만 관찰로 동작 — {self.no_trade_reason or '주문 허용 안 됨'}"

@@ -134,8 +134,10 @@ def daily_pnl(store: Store, quote_fn, today: str) -> dict:
 
 
 class Executor:
-    def __init__(self, store: Store, broker: Broker, risk: Risk, quote_fn, role: str | None = None, plan_info=None):
+    def __init__(self, store: Store, broker: Broker, risk: Risk, quote_fn, role: str | None = None, plan_info=None,
+                 intraday=None):
         self.store, self.broker, self.risk, self.quote_fn = store, broker, risk, quote_fn
+        self.intraday = intraday            # engine.intraday.Runner (키움 실시간 데이터) — 장중 조건이 붙은 계획용
         self.role = role                    # "plan" | "hts" | None(전부)
         self.plan_info = plan_info          # today -> (계획 종목 set, 계획 수) — 우선순위 판단용 (risk.priority_block)
         self.plans: dict[str, tuple[str, str, dict]] = {}   # 종목 → (조건, 버전, 계획)
@@ -223,19 +225,33 @@ class Executor:
         if position > 0:
             self._note_once(pid + ":held", sid, symbol, "PLAN_SKIP", f"{pid} 이미 보유 중인 종목 (다른 매매·수동) — 매수 안 함", now)
             return
-        if self.store.plan_trade_exists(pid, today) or _hhmm(now) < e["after"]:
+        iq = plan.get("intraday") or {}
+        if self.store.plan_trade_exists(pid, today) or _hhmm(now) < ("09:00" if iq else e["after"]):
             return
         halt = halt_state(self.store, today)
         if halt:
             self._note_once(pid + ":halt", sid, symbol, "PLAN_SKIP", f"{pid} 계좌 정지 중 — {halt.get('reason', '')}", now)
             return
-        if q.get("open") is None or q["open"] < e["min_open"]:
-            self._note_once(pid + ":open", sid, symbol, "PLAN_SKIP",
-                            f"{pid} 시가 {q.get('open') or 0:,.0f} < 조건 {e['min_open']:,.0f} — 오늘 매수 안 함", now)
-            return
-        if not (e["min_price"] < price <= e["max_price"]):
-            self._note_once(pid + ":price", sid, symbol, "PLAN_WAIT", f"{pid} 현재가 {price:,.0f}가 매수 구간 밖 — 계속 확인", now)
-            return
+        if iq:                              # 감시 목록: 매수 시점은 장중 조건(키움 실시간 분봉·현재가)이 정한다
+            if self.intraday is None:
+                self._note_once(pid + ":intraday", sid, symbol, "PLAN_SKIP", f"{pid} 장중 조건 실행기 없음 — 매수 안 함", now)
+                return
+            ok, why, cap = self.intraday.check(iq["id"], iq.get("params"), symbol, now, float(price), plan.get("name", ""))
+            if not ok:
+                self._note_once(pid + ":iwait", sid, symbol, "PLAN_WAIT", f"{pid} 장중 조건 '{iq['id']}' 대기 — {why}", now)
+                return
+            if cap and price > cap:
+                self._note_once(pid + ":icap", sid, symbol, "PLAN_WAIT", f"{pid} 장중 신호({why})지만 현재가 {price:,.0f} > 상한 {cap:,.0f}", now)
+                return
+            self._note_once(pid + ":isig", sid, symbol, "PLAN_SIGNAL", f"{pid} 장중 조건 '{iq['id']}' 신호 — {why}", now)
+        else:
+            if q.get("open") is None or q["open"] < e["min_open"]:
+                self._note_once(pid + ":open", sid, symbol, "PLAN_SKIP",
+                                f"{pid} 시가 {q.get('open') or 0:,.0f} < 조건 {e['min_open']:,.0f} — 오늘 매수 안 함", now)
+                return
+            if not (e["min_price"] < price <= e["max_price"]):
+                self._note_once(pid + ":price", sid, symbol, "PLAN_WAIT", f"{pid} 현재가 {price:,.0f}가 매수 구간 밖 — 계속 확인", now)
+                return
         why = self.risk.can_buy(self.store, self.broker, today, _hhmm(now), source=source_of(sid), symbol=symbol,
                                 plan_info=self.plan_info)
         if why:
@@ -361,10 +377,10 @@ class Executor:
         ex = plan.get("exits") or X.resolve()
         halt = halt_state(self.store, today)
         if halt and halt.get("flatten"):
-            self._sell(trade, symbol, held, price, f"계좌 정지: {halt.get('reason', '')}", now, final=True)
+            self._sell(trade, symbol, held, price, f"매매 중지: {halt.get('reason', '')}", now, final=True)
             return
         if self.risk.flatten_at and _hhmm(now) >= self.risk.flatten_at:
-            self._sell(trade, symbol, held, price, f"시간 일괄청산 ({self.risk.flatten_at})", now, final=True)
+            self._sell(trade, symbol, held, price, f"시간 청산 ({self.risk.flatten_at})", now, final=True)
             return
         reason, peak = exit_reason(trade, plan, price, now, today, self.risk.intraday_stop_pct)
         if peak != trade.get("peak"):
@@ -374,14 +390,14 @@ class Executor:
             return
         avg = avg_price(fills)
         filled = sum(f["qty"] for f in fills)
-        done_out = {s.get("step") for s in sells if str(s.get("reason", "")).startswith("분할익절")}
+        done_out = {s.get("step") for s in sells if str(s.get("reason", "")).startswith(("분할매도", "분할익절"))}
         for k, s in enumerate(ex.get("scale_out") or []):
             if k in done_out or price < avg * (1 + float(s["gain_pct"]) / 100):
                 continue
             qty = min(int(math.floor(filled * float(s["pct"]) / 100)), held)
             if qty <= 0:
                 continue
-            self._sell(trade, symbol, qty, price, f"분할익절 +{float(s['gain_pct']):g}%", now, final=qty >= held, step=k)
+            self._sell(trade, symbol, qty, price, f"분할매도 +{float(s['gain_pct']):g}%", now, final=qty >= held, step=k)
             return
         self._scale_in({**trade, "peak": peak}, symbol, fills, sells, price, ex, now, today)
 
@@ -432,14 +448,14 @@ def exit_reason(trade: dict, plan: dict, price: float, now: datetime, today: str
     stop, target = X.levels(ex, entry)
     late = _hhmm(now) >= ex.get("stop_check_after", "15:10")
     if stop is not None and (price <= stop if ex["stop_check"] == "intraday" else (late and price < stop)):
-        return f"손절 (매수 {entry:,.0f} → {price:,.0f}, 손절가 {stop:,.0f})", prev_peak
+        return f"손실제한 (매수 {entry:,.0f} → {price:,.0f}, 손실제한가 {stop:,.0f})", prev_peak
     trail = X.trail_level(ex, entry, prev_peak)
     if trail is not None and price <= trail:
-        return f"추적 손절 (최고 {prev_peak:,.0f} → {price:,.0f})", prev_peak
+        return f"트레일링스탑 (고점 {prev_peak:,.0f} → {price:,.0f})", prev_peak
     if intraday_stop_pct and price <= entry * (1 - intraday_stop_pct / 100):
-        return f"장중 손절 {intraday_stop_pct}% (사용자 한도)", prev_peak
+        return f"장중 손실제한 {intraday_stop_pct}% (사용자 한도)", prev_peak
     if target is not None and price >= target:
-        return f"목표가 {target:,.0f} 도달", max(prev_peak, price)
+        return f"이익실현 (목표가 {target:,.0f} 도달)", max(prev_peak, price)
     held = int(np.busday_count(trade.get("entry_date") or today, today)) + 1
     if held >= int(plan.get("max_hold_days") or ex["max_hold_days"]) and _hhmm(now) >= "15:15":
         return f"보유기간 만료 ({held}거래일째)", max(prev_peak, price)

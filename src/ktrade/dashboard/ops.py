@@ -75,8 +75,8 @@ def start_watch(cfg: dict, store: Store, now: datetime | None = None, popen=subp
     st = status(store, cfg, now)
     if st["hts_running"]:
         return {"ok": False, "reason": "이미 실행 중"}
-    if not cfg.get("hts_conditions") and not cfg.get("forward_test"):
-        return {"ok": False, "reason": "조건식이 없습니다 — 1단계에서 고르고 저장하세요 (또는 백테스트 체험판에서 테스트할 조건식)"}
+    if not cfg.get("hts_conditions"):
+        return {"ok": False, "reason": "조건식이 없습니다 — 1단계에서 고르고 저장하세요"}
     if not cfg["_secrets"].get("app_key"):
         return {"ok": False, "reason": "키움 로그인이 필요합니다 (조건검색은 키움 서버가 계산)"}
     logs = paths(cfg)["logs"]
@@ -149,10 +149,10 @@ def holdings(store: Store) -> pd.DataFrame:
         fills, sells, pend = book(t)
         held = int(t["qty"] or 0) if t["status"] != "submitted" else 0
         rows.append({"종목": t["symbol"], "조건": str(t["strategy"]).removeprefix("hts:"), "상태": t["status"],
-                     "보유": held, "계획": t.get("target_qty"), "평균가": t["entry_price"], "최고가": t.get("peak"),
+                     "잔고수량": held, "계획수량": t.get("target_qty"), "매입가": t["entry_price"], "고가": t.get("peak"),
                      "매수 차수": sum(1 for f in fills if f["qty"] > 0), "분할 매도": sum(1 for s in sells if s["qty"] > 0),
                      "매수일": t.get("entry_date"), "주문 중": "예" if pend else ""})
-    return pd.DataFrame(rows, columns=["종목", "조건", "상태", "보유", "계획", "평균가", "최고가", "매수 차수", "분할 매도",
+    return pd.DataFrame(rows, columns=["종목", "조건", "상태", "잔고수량", "계획수량", "매입가", "고가", "매수 차수", "분할 매도",
                                        "매수일", "주문 중"])
 
 
@@ -196,7 +196,11 @@ def recent_log(store: Store, day: str, n: int = 60) -> pd.DataFrame:
 
 
 # ---------------- 왼쪽 설정 ----------------
-COND_COLS = ["사용", "조건식", "모드", "매수 시작", "매수 끝", "하루 매수 한도", "확인(초)", "추격 한도%", "이탈 시 매도"]
+COND_COLS = ["사용", "조건식", "모드", "매수 시작", "매수 끝", "하루 매수 한도", "확인(초)", "추격 한도%", "이탈 시 매도", "파이썬 확인"]
+
+
+def _cid(v) -> str:
+    return (v.get("id") if isinstance(v, dict) else v) or ""
 
 
 def conditions_table(cfg: dict) -> pd.DataFrame:
@@ -210,7 +214,7 @@ def conditions_table(cfg: dict) -> pd.DataFrame:
         rows.append({"사용": True, "조건식": c["name"], "모드": "매매" if c.get("mode") == "trade" else "관찰",
                      "매수 시작": c["buy_window"][0], "매수 끝": c["buy_window"][1], "하루 매수 한도": int(c["max_buys_per_day"]),
                      "확인(초)": int(c.get("confirm_sec") or 0), "추격 한도%": float(c.get("chase_pct") or 0),
-                     "이탈 시 매도": bool(c.get("exit_on_remove"))})
+                     "이탈 시 매도": bool(c.get("exit_on_remove")), "파이썬 확인": _cid(c.get("confirm"))})
     return pd.DataFrame(rows, columns=COND_COLS)
 
 
@@ -227,6 +231,11 @@ def conditions_from_table(df: pd.DataFrame, old: list[dict], exits: dict | None)
                   "buy_window": [str(r.get("매수 시작") or "09:00"), str(r.get("매수 끝") or "15:20")],
                   "max_buys_per_day": int(r.get("하루 매수 한도") or 1), "confirm_sec": int(r.get("확인(초)") or 0),
                   "chase_pct": float(r.get("추격 한도%") or 0), "exit_on_remove": bool(r.get("이탈 시 매도"))})
+        cf = str(r.get("파이썬 확인") or "").strip()
+        if cf:
+            c["confirm"] = cf
+        else:
+            c.pop("confirm", None)
         if exits is not None:
             c["exits"] = exits
         out.append(c)
@@ -241,7 +250,7 @@ def save_settings(cfg: dict, conds: list[dict], risk: dict, priority: dict | Non
     names = [c["name"] for c in conds]
     if len(set(names)) != len(names):
         errs.append("같은 조건식이 두 번 있음")
-    if len(set(names) | set(cfg.get("forward_test") or [])) > 10:
+    if len(names) > 10:
         errs.append("실시간 조건검색은 동시에 10개까지 (키움 한도)")
     try:
         for c in load_conditions({"hts_conditions": conds}):

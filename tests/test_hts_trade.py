@@ -46,7 +46,7 @@ def test_trade_buy_stop_and_remove_exit(setup):
     prices["A"] = 9790.0                                                       # -2.1% → 손절 (장중 즉시)
     ex.check("A", T0 + timedelta(minutes=3))
     closed = store.query("SELECT * FROM plan_trades WHERE symbol='A'").iloc[0]
-    assert closed["status"] == "closed" and "손절" in closed["exit_reason"] and broker.position("A") == 0
+    assert closed["status"] == "closed" and "손실제한" in closed["exit_reason"] and broker.position("A") == 0
     assert book.handle(Ev("insert", "B"), T0 + timedelta(minutes=5))[0]["action"] == "BUY"
     acts = [x["action"] for x in book.handle(Ev("remove", "B"), T0 + timedelta(minutes=6))]
     assert acts == ["REMOVE", "SELL"] and broker.position("B") == 0
@@ -86,18 +86,18 @@ def test_simulate_rules():
     ex = X.resolve(HTS_EXITS, {"trailing": {"activate_pct": None, "trail_pct": None}})
     b = bars("2026-10-26", "09:16:00", [10000, 10100, 10280, 10310])           # +3% 목표가에 봉 안에서 닿음
     r = forward.simulate(b, "2026-10-26 09:15:20", 10000, ex, cost_pct=0.0)
-    assert r["reason"] == "목표가" and r["exit_price"] == pytest.approx(10300) and r["ret_pct"] == pytest.approx(3.0)
+    assert r["reason"] == "이익실현" and r["exit_price"] == pytest.approx(10300) and r["ret_pct"] == pytest.approx(3.0)
     gap = bars("2026-10-26", "09:16:00", [10000, 10350])                       # 목표가 위로 바로 시작한 봉 → 그 봉 시가
     assert forward.simulate(gap, "2026-10-26 09:15:20", 10000, ex, 0.0)["exit_price"] == pytest.approx(10350)
     b = bars("2026-10-26", "09:16:00", [10000, 9790])
-    assert forward.simulate(b, "2026-10-26 09:15:20", 10000, ex, 0.0)["reason"] == "손절"
+    assert forward.simulate(b, "2026-10-26 09:15:20", 10000, ex, 0.0)["reason"] == "손실제한"
     wide = pd.DataFrame([{"ts": "2026-10-26 09:16:00", "open": 10000, "high": 10400, "low": 9700, "close": 10000, "volume": 1}])
-    assert forward.simulate(wide, "2026-10-26 09:15:20", 10000, ex, 0.0)["reason"] == "손절"     # 한 봉에 둘 다 → 손절
+    assert forward.simulate(wide, "2026-10-26 09:15:20", 10000, ex, 0.0)["reason"] == "손실제한"     # 한 봉에 둘 다 → 손절
     late = bars("2026-10-26", "15:13:00", [10000, 10010, 10020, 10030])
     assert forward.simulate(late, "2026-10-26 15:12:10", 10000, ex, 0.0)["reason"] == "당일 청산"
     trail = X.resolve(HTS_EXITS, {"take_profit": {"type": "none"}, "trailing": {"activate_pct": 2, "trail_pct": 1}})
     up = bars("2026-10-26", "09:16:00", [10100, 10250, 10180, 10050], spread=0.0)
-    assert forward.simulate(up, "2026-10-26 09:15:20", 10000, trail, 0.0)["reason"] == "추적 손절"
+    assert forward.simulate(up, "2026-10-26 09:15:20", 10000, trail, 0.0)["reason"] == "트레일링스탑"
     assert forward.simulate(bars("2026-10-26", "09:00:00", [1]), "2026-10-26 09:15:20", 10000, ex) is None
 
 

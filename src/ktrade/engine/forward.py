@@ -187,3 +187,44 @@ def render(rep: dict) -> str:
         lines.append(f"\n! 1분봉이 없어 못 매긴 신호 {rep['missing_bars']}건 — ktrade hts report --collect 로 받아서 다시")
     lines.append("주의: 과거 신호에 대한 가상 결과입니다(1분봉 근사, 비용 차감). 미래 수익을 보장하지 않습니다.")
     return "\n".join(lines)
+
+
+def confirm_report(store: Store, cfg: dict, days: list[str], cond_name: str, iid: str, params: dict | None = None) -> dict:
+    """조건식 편입(묶음마다 첫 편입) → 파이썬 확인(장중 조건)을 그 시각까지의 받아 둔 1분봉으로 돌려 통과/불통과를 가르고,
+    각각 '그때 샀다면' 결과를 낸다. {all, passed, failed, table, missing_bars}."""
+    from datetime import datetime as _dt
+
+    from ktrade.engine.intraday import Runner, StoredSource
+    conds = {c["name"]: c for c in load_conditions(cfg)}
+    c = conds.get(cond_name) or {"name": cond_name}
+    ex = cond_exits(c)
+    cost = float(cfg.get("backtest", {}).get("cost_pct", 0.25))
+    sig = pd.concat([store.signals(d, cond_name) for d in days], ignore_index=True) if days else pd.DataFrame()
+    out = {"all": {"n": 0}, "passed": {"n": 0}, "failed": {"n": 0}, "table": pd.DataFrame(), "missing_bars": 0}
+    if sig.empty:
+        return out
+    src = StoredSource(store)
+    runner = Runner(cfg, src)
+    rows = []
+    for r in episodes(sig, float((cfg.get("hts") or {}).get("episode_gap_min", EPISODE_GAP_MIN))).itertuples():
+        if not r.price or r.price != r.price:
+            continue
+        ts = r.ts.replace("T", " ")
+        bars = src.day_minutes(r.symbol, r.date)
+        if bars.empty:
+            out["missing_bars"] += 1
+            continue
+        ok, why, _ = runner.check(iid, params, r.symbol, _dt.fromisoformat(ts), float(r.price), event="insert",
+                                  insert_price=float(r.price))
+        sim = simulate(_minutes(store, r.symbol, r.date), ts, float(r.price), ex, cost)
+        if sim is None:
+            out["missing_bars"] += 1
+            continue
+        rows.append({"date": r.date, "time": ts[11:19], "symbol": r.symbol, "통과": ok, "확인 사유": why, "entry": r.price, **sim})
+    t = pd.DataFrame(rows)
+    out["table"] = t
+    if not t.empty:
+        out["all"] = _stats(t["ret_pct"])
+        out["passed"] = _stats(t[t["통과"]]["ret_pct"])
+        out["failed"] = _stats(t[~t["통과"]]["ret_pct"])
+    return out

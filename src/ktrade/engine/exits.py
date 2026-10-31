@@ -129,14 +129,14 @@ class PositionSim:
         intraday = ex["stop_check"] == "intraday"
         hits = []                                    # (기준가, 체결가, 사유)
         if stop is not None and (low <= stop if intraday else (late and c < stop)):
-            hits.append((stop, min(o, stop) if intraday else c, "손절"))
+            hits.append((stop, min(o, stop) if intraday else c, "손실제한"))
         if not stop_only:
             trail = trail_level(ex, self.avg, self.peak)
             if trail is not None and low <= trail:
-                hits.append((trail, min(o, trail), "추적 손절"))
+                hits.append((trail, min(o, trail), "트레일링스탑"))
         if hits:
             # 값이 내려오며 먼저 닿는 쪽 = 기준가가 높은 쪽 (같으면 손절)
-            _, px, why = max(hits, key=lambda x: (x[0], x[2] == "손절"))
+            _, px, why = max(hits, key=lambda x: (x[0], x[2] == "손실제한"))
             self._sell(px, self.held, why)
             return True
         if stop_only:
@@ -145,12 +145,12 @@ class PositionSim:
         for g, frac in list(self.out_steps):
             level = self.avg * (1 + g / 100)
             if h >= level:
-                self._sell(max(o, level), self.filled * frac, f"분할익절 +{g:g}%")
+                self._sell(max(o, level), self.filled * frac, f"분할매도 +{g:g}%")
                 self.out_steps.remove((g, frac))
         if self.closed:
             return True
         if target is not None and h >= target:
-            self._sell(max(o, target), self.held, "목표가")
+            self._sell(max(o, target), self.held, "이익실현")
             return True
         if time_exit:
             self._sell(c, self.held, time_reason)
@@ -221,7 +221,7 @@ def describe(ex: dict) -> str:
     st = {"pct": f"매수가 -{s.get('value')}%", "atr": f"매수가 - ATR({s.get('period', 14)})×{s.get('value')}",
           "low": f"{s.get('value')}일 최저가 -{s.get('buffer_pct', 1)}%", "none": "없음"}[s["type"]]
     tg = {"pct": f"매수가 +{tp.get('value')}%", "r": f"손절폭 × {tp.get('value')}", "none": "없음"}[tp["type"]]
-    tr = f", 추적 손절 최고가 -{t['trail_pct']}%" + (f"(+{t['activate_pct']}% 이후)" if t.get("activate_pct") is not None else "") \
+    tr = f", 트레일링스탑 고점 대비 -{t['trail_pct']}%" + (f"(+{t['activate_pct']}% 이후)" if t.get("activate_pct") is not None else "") \
         if t.get("trail_pct") else ""
     when = "장중 즉시" if ex["stop_check"] == "intraday" else f"{ex['stop_check_after']} 이후"
-    return f"손절 {st}({when}), 익절 {tg}{tr}, 최대 {ex['max_hold_days']}일"
+    return f"손실제한 {st}({when}), 이익실현 {tg}{tr}, 최대 보유 {ex['max_hold_days']}일"
