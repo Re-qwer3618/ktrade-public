@@ -94,11 +94,11 @@ def test_status_and_tables(tmp_path, cfg):
     store.set_setting("hts.heartbeat", {"ts": (NOW - timedelta(seconds=3)).isoformat(timespec="seconds"),
                                         "conds": ["단타전략-2"], "registered": ["단타전략-2"], "restarts": 0})
     s = ops.status(store, cfg, NOW)
-    assert s["hts_running"] and not s["run_running"] and s["mode"].startswith("paper") and s["pnl"]["unrealized"] == 20_000
+    assert s["hts_running"] and not s["run_running"] and s["mode"].startswith("가상매매") and s["pnl"]["unrealized"] == 20_000
     assert not ops.status(store, cfg, NOW + timedelta(minutes=1))["hts_running"]
     ins = ops.inserts(store, DAY)
     assert dict(zip(ins["종목"], ins["상태"])) == {"A": "편입 중", "B": "이탈"}
-    assert ins.set_index("종목").loc["B", "판단"] == "SKIP"
+    assert ins.set_index("종목").loc["B", "판단"] == "건너뜀"
     h = ops.holdings(store)
     assert h.iloc[0]["종목"] == "A" and h.iloc[0]["잔고수량"] == 100 and h.iloc[0]["매입가"] == 10000
     assert ops.pending(store, NOW).empty

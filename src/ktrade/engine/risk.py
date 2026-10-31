@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-SOURCE_KO = {"plan": "계획", "hts": "조건식"}
-PRIORITY_MODES = {"plan": "계획 우선", "hts": "선착순 (조건식이 먼저 오면 먼저)", "split": "나눠 쓰기"}
+SOURCE_KO = {"plan": "매매계획", "hts": "조건검색"}
+PRIORITY_MODES = {"plan": "매매계획 우선", "hts": "먼저 온 신호 우선", "split": "한도 나눠 쓰기"}
 
 
 @dataclass
@@ -91,21 +91,21 @@ class Risk:
             lim = (p.get("split") or {}).get(source) or {}
             h, b = counts(mine)
             if lim.get("positions") is not None and h >= int(lim["positions"]):
-                return f"{SOURCE_KO[source]} 몫 동시 보유 {h}/{lim['positions']} (나눠 쓰기)"
+                return f"{SOURCE_KO[source]} 몫 동시 보유 {h}/{lim['positions']} (한도 나눠 쓰기)"
             if lim.get("orders") is not None and b >= int(lim["orders"]):
-                return f"{SOURCE_KO[source]} 몫 하루 매수 {b}/{lim['orders']} (나눠 쓰기)"
+                return f"{SOURCE_KO[source]} 몫 하루 매수 {b}/{lim['orders']} (한도 나눠 쓰기)"
             return ""
         if source != "hts" or plan_info is None:          # 계획 우선: 조건식만 양보한다
             return ""
         syms, n_plans = plan_info(today)
         if symbol and symbol in syms:
-            return "계획 우선 — 오늘 장 마감 후 계획에 있는 종목"
+            return "매매계획 우선 — 오늘 장 마감 후 계획에 있는 종목"
         reserve = min(int(p.get("plan_reserve") or 0), int(n_plans))
         if reserve <= 0:
             return ""
         plan_held, plan_bought = counts("NOT " + hts_like)
         if held + max(0, reserve - plan_held) >= self.max_concurrent_positions:
-            return f"계획 우선 — 동시 보유 {held}/{self.max_concurrent_positions} 중 계획 몫 {reserve}자리 남겨 둠"
+            return f"매매계획 우선 — 동시 보유 {held}/{self.max_concurrent_positions} 중 계획 몫 {reserve}자리 남겨 둠"
         if bought + max(0, reserve - plan_bought) >= self.max_new_orders_per_day:
-            return f"계획 우선 — 하루 신규 매수 {bought}/{self.max_new_orders_per_day} 중 계획 몫 {reserve}건 남겨 둠"
+            return f"매매계획 우선 — 하루 신규 매수 {bought}/{self.max_new_orders_per_day} 중 계획 몫 {reserve}건 남겨 둠"
         return ""

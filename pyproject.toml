@@ -1,6 +1,6 @@
 [project]
 name = "ktrade"
-version = "0.9.1"
+version = "0.9.2"
 description = "나만의 매매조건을 실험하는 국내주식 엔진 — 키움 REST API 기반, 백테스트·모의투자 (키움증권과 무관한 개인 프로젝트)"
 readme = "README.md"
 license = "MIT"

@@ -44,7 +44,7 @@ def status(store: Store, cfg: dict, now: datetime | None = None) -> dict:
     stop_req = store.get_setting("process.stop.hts") or {}
     real = cfg.get("broker") == "kiwoom" and not cfg["kiwoom"].get("is_mock", True)
     return {
-        "mode": "paper (가상 체결)" if cfg.get("broker", "paper") == "paper" else ("키움 실전" if real else "키움 모의투자"),
+        "mode": "가상매매 (실제 주문 없음)" if cfg.get("broker", "paper") == "paper" else ("키움 실전투자" if real else "키움 모의투자"),
         "real": real,
         "hts_running": hts_age is not None and hts_age < HTS_FRESH_SEC,
         "hts": hts, "hts_age": hts_age, "proc": proc,
@@ -119,6 +119,18 @@ def last_active_day(store: Store, today: str) -> str:
     return today if not d or d == today else str(d)
 
 
+ACTION_KO = {"INIT": "등록 시 편입", "WAIT": "확인 대기", "WOULD_BUY": "매수 신호", "SKIP": "건너뜀", "CONFIRM_FAIL": "확인 탈락",
+             "REMOVE": "이탈", "WOULD_SELL": "이탈 매도 신호", "BUY": "매수", "SELL": "매도", "BUY_FAILED": "매수 실패",
+             "NONE": "-", "ADD": "추가", "CANCEL": "취소", "HALT": "매매 중지", "RELEASE": "중지 해제", "START": "시작", "STOP": "중지"}
+SIGNAL_KO = {"PLAN_BUY": "매매계획 매수", "PLAN_SKIP": "매매계획 건너뜀", "PLAN_WAIT": "매매계획 대기", "PLAN_SIGNAL": "장중 신호",
+             "PLAN_EXIT": "매도", "PLAN_ADD": "분할매수", "ORDER_CANCEL": "미체결 취소", "HALT": "매매 중지", "PROCESS": "엔진",
+             "HTS_STATUS": "조건검색 상태", "HTS_ERROR": "조건검색 오류", "HTS_REGISTERED": "조건식 등록"}
+
+
+def ko(v, table: dict) -> str:
+    return table.get(str(v), str(v)) if v is not None else ""
+
+
 def inserts(store: Store, day: str) -> pd.DataFrame:
     """오늘 편입 종목 — 조건식·종목마다 마지막 상태(편입 중/이탈)와 판단."""
     sig = store.signals(day)
@@ -134,7 +146,7 @@ def inserts(store: Store, day: str) -> pd.DataFrame:
         rows.append({"조건식": cond, "종목": sym, "상태": "이탈" if last["event"] == "D" else "편입 중",
                      "첫 편입": (ins["ts"].iloc[0] if not ins.empty else last["ts"])[11:19], "마지막": last["ts"][11:19],
                      "가격": ins["price"].dropna().iloc[-1] if not ins["price"].dropna().empty else None,
-                     "판단": act["action"], "사유": act["reason"]})
+                     "판단": ko(act["action"], ACTION_KO), "사유": act["reason"]})
     return pd.DataFrame(rows).sort_values("마지막", ascending=False, ignore_index=True)
 
 
@@ -191,6 +203,9 @@ def recent_log(store: Store, day: str, n: int = 60) -> pd.DataFrame:
     r = store.query("SELECT timestamp, strategy, symbol, signal, action, detail FROM decisions "
                     "WHERE substr(timestamp, 1, 10) = ? ORDER BY id DESC LIMIT ?", (day, n))
     r["timestamp"] = r["timestamp"].str[11:19]
+    r["signal"] = r["signal"].map(lambda v: ko(v, SIGNAL_KO))
+    r["action"] = r["action"].map(lambda v: ko(v, ACTION_KO))
+    r["strategy"] = r["strategy"].str.replace("hts:", "조건식 ", regex=False).replace("engine", "엔진")
     return r.rename(columns={"timestamp": "시각", "strategy": "조건", "symbol": "종목", "signal": "신호", "action": "처리",
                              "detail": "내용"})
 
