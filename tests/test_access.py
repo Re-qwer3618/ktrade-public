@@ -38,12 +38,12 @@ def test_code_check(home):
         access.check("아무거나", "kim")
 
 
-def test_backtest_locked_without_login(home, monkeypatch, capsys):
+def test_backtest_open_without_login(home, monkeypatch, capsys):
+    """0.9.3부터 백테스트는 로그인 없이 모두에게 — 이용 코드는 관리자·AI용으로만 남는다."""
     monkeypatch.delenv("KTRADE_ACCESS_CODE")
-    assert access.current() is None
-    for argv in (["test", "x"], ["backtest", "x"], ["experiments", "x"], ["compare", "x"]):
-        with pytest.raises(SystemExit, match="이용 코드"):
-            cli.main(argv)
+    assert access.current() is None and access.can_backtest(None) and not access.can_ai(None)
+    with pytest.raises(SystemExit, match="실험 기록이 없"):                 # 잠금 없음 — 기록이 없을 뿐
+        cli.main(["experiments", "x"])
     code = access.issue(TEST_SEED, "kim", "backtest", 30)
     cli.main(["access", "login", "--id", "kim", "--code", code])
     info = access.current()
@@ -98,14 +98,14 @@ def test_dashboard_tabs_by_access(home, monkeypatch):
     at = AppTest.from_file(str(APP), default_timeout=60).run()                 # 관리자 코드(conftest) → 정식판 + AI + 관리자
     assert not at.exception, at.exception
     tabs = [t.label for t in at.tabs]
-    assert "🧪 백테스트 정식판" in tabs and "🛠️ 관리자" in tabs
+    assert "🧪 백테스트" in tabs and "🛠️ 관리자" in tabs
     assert any("AI 기능 사용 가능" in x.value for x in at.sidebar.success)                # 관리자 = AI판
     monkeypatch.delenv("KTRADE_ACCESS_CODE")
-    at = AppTest.from_file(str(APP), default_timeout=60).run()                 # 코드 없음 → 기본 기능 + 체험판
+    at = AppTest.from_file(str(APP), default_timeout=60).run()                 # 코드 없음 → 백테스트 포함 전부 (관리자 탭만 없음)
     assert not at.exception, at.exception
     tabs = [t.label for t in at.tabs]
-    assert tabs[0] == "🕹️ 자동매매" and "🧪 백테스트 체험판" in tabs and "🛠️ 관리자" not in tabs
-    assert any(b.label == "🔓 백테스트 정식판 로그인" for b in at.sidebar.button)
+    assert tabs[0] == "🕹️ 자동매매" and "🧪 백테스트" in tabs and "🛠️ 관리자" not in tabs
+    assert any(b.label == "🔐 관리자 로그인" for b in at.sidebar.button)
 
 
 def test_dashboard_without_chart_data(home, monkeypatch):

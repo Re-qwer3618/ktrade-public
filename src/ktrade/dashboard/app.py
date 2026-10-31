@@ -2,10 +2,9 @@
 
 이 PC에서만 열린다(127.0.0.1). 대시보드가 직접 주문하지는 않는다 — 자동매매 탭은 엔진(ktrade hts watch)을 띄우고·멈추고,
 설정(config.yaml)·긴급 정지 표시를 남길 뿐이고 주문은 그 엔진이 낸다.
-  · 처음 화면: 키움 앱키 로그인(OS 자격 증명 저장소에 보관) 또는 체험 모드(가상 데이터로 백테스트만)
-  · 로그인 뒤 DB가 없으면: 몇 종목 시세 받기
-  · 본 화면(기본 기능): 운영(조건식 자동매매 설정·시작·중지·실시간) · 계획 · 매매 기록 · 성적 · 영웅문 조건식 · 종목 차트 · 사용법
-  · 백테스트(매매조건 실험): 이용 코드로 추가 로그인해야 열린다 (ktrade/access.py). 관리자는 관리자 탭에서 코드 발급
+  · 처음 화면: 키움 앱키 로그인(OS 자격 증명 저장소에 보관)
+  · 본 화면 — 모두에게, 로그인 없이: 자동매매 · 매매계획 · 체결내역 · 실현손익 · 조건검색·차트 · 데이터 · 백테스트 · 사용법
+  · 관리자(이용 코드): 관리자 탭(코드 발급) + AI 기능 (ktrade/access.py)
 """
 from __future__ import annotations
 
@@ -78,12 +77,12 @@ def sidebar() -> None:
             ss.page = "login"
             st.rerun()
     if acc:
-        sb.success(f"🔓 백테스트 정식판\n\n{access.describe(acc)}" + ("\n\n🤖 AI 기능 사용 가능" if access.can_ai(acc) else ""))
-        if sb.button("백테스트 로그아웃", width="stretch"):
+        sb.success(f"🔐 관리자\n\n{access.describe(acc)}" + ("\n\n🤖 AI 기능 사용 가능" if access.can_ai(acc) else ""))
+        if sb.button("관리자 로그아웃", width="stretch"):
             access.logout()
             st.rerun()
     elif ss.page != "access":
-        if sb.button("🔓 백테스트 정식판 로그인", width="stretch", help="관리자에게 받은 아이디·이용 코드로 로그인하면 내 매매조건 백테스트가 열립니다"):
+        if sb.button("🔐 관리자 로그인", width="stretch", type="tertiary", help="관리자(이용 코드 발급·AI 기능)만 — 나머지 기능은 로그인 없이 씁니다"):
             ss.page = "access"
             st.rerun()
     sb.divider()
@@ -148,14 +147,13 @@ def access_form(key_prefix: str = "access") -> None:
         st.error(f"로그인 실패: {exc}")
         return
     ss.page = None
-    st.toast(f"백테스트 로그인 — {access.describe(info)}")
+    st.toast(f"관리자 로그인 — {access.describe(info)}")
     st.rerun()
 
 
 def page_access() -> None:
-    st.title("🔓 백테스트 정식판 로그인")
-    st.markdown("내 매매조건 백테스트와 '계획에 쓸 매매조건 켜기'는 **이용 코드**로 추가 로그인해야 씁니다. 키움 앱키 로그인과는 따로입니다.\n\n"
-                "코드가 없으면 관리자에게 요청하세요. 코드 없이도 🧪 백테스트 탭의 **체험판**(예제 매매조건 · 조건식 테스트)은 씁니다.")
+    st.title("🔐 관리자 로그인")
+    st.markdown("백테스트를 포함한 모든 기능은 로그인 없이 씁니다. 이 로그인은 **관리자**(이용 코드 발급·AI 기능)용입니다.")
     access_form()
     if st.button("← 돌아가기"):
         ss.page = None
@@ -179,8 +177,8 @@ def page_welcome() -> None:
     c1.markdown("**1. 키움 앱키 로그인**\n\n내 키움 REST API 앱키를 넣습니다. 키는 이 PC에만 저장됩니다.")
     c2.markdown("**2. 자동매매 (기본 기능)**\n\n조건검색식·이익실현·손실제한·분할매매·계좌 한도를 정하고 자동매매 탭에서 시작합니다. "
                 "가상 체결 → 모의투자 → (동의 뒤) 실전.")
-    c3.markdown("**3. 백테스트**\n\n**체험판**: 예제 매매조건을 내가 받은 키움 데이터로 실험. "
-                "**정식판**(이용 코드): 내 매매조건 실험 · 계획에 켜기.")
+    c3.markdown("**3. 백테스트 · 매매계획**\n\n내 매매조건·장중 조건을 내가 받은 키움 데이터로 실험하고, 마음에 들면 매매계획에 켜서 "
+                "자동매매에 연결합니다. 로그인 없이 모두 씁니다.")
     st.divider()
     left, right = st.columns([3, 2], gap="large")
     with left:
@@ -318,18 +316,6 @@ def is_example(info) -> bool:
     return bool(b) and str(info.source).startswith(str(b))
 
 
-def tab_trial(cfg: dict, store: Store) -> None:
-    """체험판 — 예제 매매조건을 내가 받은 키움 데이터로 백테스트."""
-    st.info("**체험판** — 예제 매매조건을 **내가 키움에서 받은 데이터**로 백테스트합니다. "
-            "내 매매조건 실험·계획에 켜기는 **정식판**(이용 코드).", icon=":material/science:")
-    t1, t3 = st.tabs(["예제 매매조건", "🔓 정식판 로그인"])
-    with t1:
-        tab_lab(cfg, store, examples_only=True)
-    with t3:
-        st.markdown("관리자에게 받은 **아이디·이용 코드**로 로그인하면 내 매매조건 백테스트와 '계획에 쓸 매매조건 켜기'가 열립니다.")
-        access_form("lab_access")
-
-
 def tab_lab(cfg: dict, store: Store, examples_only: bool = False) -> None:
     from ktrade.engine import loader
     allf = loader.discover(cfg)
@@ -374,7 +360,7 @@ def lab_experiments(cfg: dict, found: dict, enabled: list, ai_on: bool | None) -
     c1, c2 = st.columns([1, 3])
     years = c1.number_input("기간(년)", 0.5, 10.0, float(cfg["backtest"].get("years") or 3), 0.5)
     iid = ""
-    if ai_on is not None:                                       # 정식판: 장중 조건으로 매수 시점 정하기
+    if ai_on is not None:                                       # 장중 조건으로 매수 시점 정하기
         item = next((e for e in cfg["strategies"]["enabled"] if isinstance(e, dict) and e.get("id") == sid), {})
         cur = item.get("intraday") or ""
         cur = cur.get("id", "") if isinstance(cur, dict) else cur
@@ -420,7 +406,7 @@ def lab_experiments(cfg: dict, found: dict, enabled: list, ai_on: bool | None) -
 
 
 def lab_enabled(cfg: dict, found: dict) -> None:
-    """정식판 — 계획에 쓸 매매조건(config strategies.enabled): 켜기 · 순서(우선순위) · 파라미터."""
+    """계획에 쓸 매매조건(config strategies.enabled): 켜기 · 순서(우선순위) · 파라미터."""
     from ktrade.engine import experiments, loader
     allf = loader.discover(cfg)
     st.markdown("켠 매매조건이 장 마감 후 다음 거래일 계획(감시 목록)을 만듭니다 — **순서가 작을수록 우선**(같은 종목을 고르면 위 조건). "
@@ -539,7 +525,7 @@ def cond_folder(cfg: dict) -> None:
 
 
 def lab_intraday(cfg: dict, store: Store, found: dict) -> None:
-    """정식판 — 장중 조건: 검사, ① 조건식 편입 + 파이썬 확인 성적(받아 둔 신호·1분봉), ② 쓰는 곳 안내."""
+    """장중 조건: 검사, ① 조건식 편입 + 파이썬 확인 성적(받아 둔 신호·1분봉), ② 쓰는 곳 안내."""
     from ktrade.engine import forward
     from ktrade.engine.validate import validate
     if not found:
@@ -771,7 +757,7 @@ def schedule_settings(cfg: dict) -> None:
         st.caption("**장 마감 후 계획**(`ktrade daily`): 시세 받기 → 켠 매매조건으로 다음 거래일 계획. "
                    "**장중 실행**(`ktrade run`): 그 계획대로 매수하고 엔진 규칙(이익실현·손실제한)으로 매도, 장 마감까지 돎. "
                    "PC가 켜져 있고 로그인돼 있어야 돕니다. 아래 영웅문 조건식 엔진(5단계 시작)과는 따로 돌고, 둘이 겹치면 4단계 우선순위를 따릅니다. "
-                   "계획에 쓸 매매조건은 🧪 백테스트(정식판)에서 켭니다.")
+                   "계획에 쓸 매매조건은 🧪 백테스트 탭에서 켭니다.")
         if reg is not None:
             st.caption("작업 스케줄러: " + " · ".join(f"`{n}` {'등록됨' if ok else '없음'}" for n, ok in reg.items()))
         if msg := ss.pop("schedule_msg", None):
@@ -815,7 +801,7 @@ def ai_pick_provider(cfg: dict, key: str) -> str | None:
     from ktrade import ai
     have = [p for p in ai.PROVIDERS if ai.has_key(p)]
     if not have:
-        st.info("AI API 키가 없습니다 — 🧪 백테스트 정식판 → 🤖 AI 도우미 → AI 연결 설정에서 넣으세요.", icon=":material/key:")
+        st.info("AI API 키가 없습니다 — 🧪 백테스트 → 🤖 AI 도우미 → AI 연결 설정에서 넣으세요.", icon=":material/key:")
         return None
     s = ai.settings(cfg)
     return st.radio("AI", have, index=have.index(s["provider"]) if s["provider"] in have else 0, format_func=ai.PROVIDERS.get,
@@ -898,7 +884,7 @@ def tab_plan(P: dict, store: Store, cfg: dict) -> None:
         with st.expander("🤖 자연어 종목 찾기 · AI 분석", expanded=not docs):
             ai_search(cfg, store)
     if not docs:
-        st.info("계획이 없습니다. 백테스트(정식판)에서 켠 매매조건이 장 마감 후 다음 거래일 계획을 만듭니다 "
+        st.info("계획이 없습니다. 🧪 백테스트 탭에서 켠 매매조건이 장 마감 후 다음 거래일 계획을 만듭니다 "
                 "(자동매매 탭 ⏰ 자동 실행, 또는 `ktrade daily`). 일봉 데이터가 있어야 합니다.")
     else:
         cost = float(cfg["backtest"]["cost_pct"])
@@ -1645,8 +1631,8 @@ def tab_help() -> None:
 1. **데이터 받기 (백테스트·계획용, 선택)** — 📥 데이터 탭에서 몇 종목 또는 받을 범위, 또는 명령창 `ktrade collect`
 2. **매매조건 만들기** — `ktrade new 내조건` → `~/.ktrade/strategies/내조건/strategy.py` 작성.
    직접 쓰기 어렵다면 `~/.ktrade/docs/LLM_CONTEXT.md`를 Claude·Gemini에 붙여 넣고 원하는 매매기법을 설명하면 코드를 써 줍니다.
-3. **실험** — 🧪 백테스트 탭. **체험판**: 예제 매매조건을 내 데이터로. **정식판**(이용 코드): 내 매매조건, `ktrade test 내조건`. 바꿀 때마다 기록이 쌓여 비교됩니다.
-4. **켜기** — 정식판 백테스트 탭 '계획에 쓸 매매조건'에서 켬 → 장 마감 후 다음 날 계획이 생깁니다 (**계획** 탭).
+3. **실험** — 🧪 백테스트 탭 → 실험 (또는 `ktrade test 내조건`). 장중 조건을 붙여 1분봉으로도 실험. 바꿀 때마다 기록이 쌓여 비교됩니다.
+4. **켜기** — 🧪 백테스트 탭 '계획에 쓸 매매조건'에서 켬(장중 조건도 붙일 수 있음) → 장 마감 후 다음 날 매매계획이 생기고 자동매매가 그대로 실행합니다 (**매매계획** 탭).
 5. **모의 운영** — `ktrade run`: 기본은 가상매매(실제 주문 없음). 키움 모의투자는 `broker: kiwoom`, `is_mock: true`.
 6. **자동 실행** — 🕹️ 자동매매 탭 맨 위 ⏰ 자동 실행에서 시각·요일을 정해 등록 (또는 `ktrade schedule install`, 기본 평일 16:30 계획 · 08:50 실행).
 
@@ -1656,7 +1642,7 @@ def tab_help() -> None:
 
 def tab_admin() -> None:
     """관리자 — 이용 코드 발급(이 PC에 서명 키가 있을 때) · 발급 기록."""
-    st.markdown(f"관리자 권한: **{access.describe(acc)}** — 모든 기능(기본 기능 + 백테스트)과 이용 코드 발급.")
+    st.markdown(f"관리자 권한: **{access.describe(acc)}** — 이용 코드 발급과 AI 기능. (백테스트 등 나머지 기능은 모두에게 열려 있음)")
     seed = access.signing_seed()
     if not seed:
         st.info("이 PC에는 관리자 서명 키가 없어 코드를 발급할 수 없습니다. 서명 키가 있는 PC에서 발급하세요 "
@@ -1699,9 +1685,8 @@ def main_view(cfg: dict) -> None:
               + f" · {'모의투자' if cfg['kiwoom'].get('is_mock', True) else '실전투자'}")
     c2.metric("매매계획 마지막 점검", hb.get("ts", "기록 없음"))
     c3.metric("최근 일봉", store.last_index_date_before("9999-12-31") or "받지 않음 (선택)")
-    full = access.can_backtest(acc)
     names = ["🕹️ 자동매매", "🗓️ 매매계획", "💹 체결내역", "📊 실현손익", "🔎 조건검색 · 차트", "📥 데이터",
-             "🧪 백테스트 " + ("정식판" if full else "체험판"), "❓ 사용법"] + (["🛠️ 관리자"] if access.is_admin(acc) else [])
+             "🧪 백테스트", "❓ 사용법"] + (["🛠️ 관리자"] if access.is_admin(acc) else [])
     tabs = st.tabs(names)
     with tabs[0]:
         tab_ops(cfg)
@@ -1716,10 +1701,7 @@ def main_view(cfg: dict) -> None:
     with tabs[5]:
         tab_data(cfg, store)
     with tabs[6]:
-        if full:
-            tab_lab(cfg, store)
-        else:
-            tab_trial(cfg, store)
+        tab_lab(cfg, store)
     with tabs[7]:
         tab_help()
     if access.is_admin(acc):

@@ -1,12 +1,13 @@
-"""이용 권한 — 백테스트는 관리자가 발급한 '이용 코드'로 추가 로그인해야 쓴다.
+"""이용 권한 — 0.9.3부터 백테스트·매매조건·계획 등 모든 기본 기능은 로그인 없이 모두에게 열려 있다.
+이용 코드는 관리자(이용 코드 발급·AI 기능)만 쓴다. AI판은 출시 때 구독으로 따로 연다(ai_subscribed).
 
-  역할   backtest = 백테스트(매매조건 실험)   admin = 백테스트 + 이용 코드 발급(관리자 탭·ktrade admin)
+  역할   admin = 이용 코드 발급(관리자 탭·ktrade admin) + AI 기능   backtest = 예전 코드 호환(지금은 아무 기능도 더 열지 않음)
   코드   KT1.<내용>.<서명> — 내용(아이디·역할·만료일)을 관리자 서명 키(Ed25519)로 서명한 것.
          ktrade는 아래 PUBLIC_KEYS(공개 키)로 서명만 확인한다 → 서버 없이 어느 PC에서나 쓰고, 위조할 수 없다.
   저장   로그인한 코드: <KTRADE_HOME>/access.json · 환경변수 KTRADE_ACCESS_CODE가 있으면 그게 우선 (자동 실행·개발용)
          관리자 서명 키: <KTRADE_HOME>/admin/signing_key — 이 파일이 있는 PC에서만 발급할 수 있다. git·배포에 넣지 말 것.
 
-키움 앱키 로그인(credentials.py)과는 별개다. 운영(자동매매)·계획·기록 같은 기본 기능은 이용 코드 없이 쓴다.
+키움 앱키 로그인(credentials.py)과는 별개다.
 """
 from __future__ import annotations
 
@@ -201,7 +202,8 @@ def current() -> dict | None:
 
 
 def can_backtest(info: dict | None) -> bool:
-    return bool(info) and info.get("role") in ROLES
+    """백테스트(매매조건 실험·계획에 켜기)는 모두에게 — 0.9.3부터 로그인 없이."""
+    return True
 
 
 def is_admin(info: dict | None) -> bool:

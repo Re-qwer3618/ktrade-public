@@ -1,6 +1,6 @@
 """ktrade 명령 — 매매조건 실험 엔진.
 
-  매매조건 만들기·실험 (조건을 바꾸거나 더할 때마다) — test·backtest·experiments·compare는 이용 코드 로그인 필요(ktrade access login)
+  매매조건 만들기·실험 (조건을 바꾸거나 더할 때마다) — 로그인 없이 누구나
     ktrade new <id>                  내 매매조건 뼈대 (~/.ktrade/strategies/<id>) — 종목 선정 + 매수 타이밍만 작성
     ktrade test <id>                 검사 + 백테스트 + 이전 실험과 비교 (한 번에)
     ktrade validate <id> [--asof]    검사만 (형식·금지 사항·실행 결과·엔진 검사)
@@ -31,7 +31,7 @@
   운영
     ktrade login [--real] | logout     키움 앱키 입력·삭제 (대시보드 로그인 화면과 같음, OS 자격 증명 저장소에 보관)
     ktrade real-orders on|off|show     실전 계좌 주문 동의 (조건식 매매가 실전 키로 주문하려면 on)
-    ktrade access login|logout|status  백테스트 이용 코드 로그인 (관리자에게 받은 아이디·코드)
+    ktrade access login|logout|status  관리자 로그인 (이용 코드 — 관리자·AI 기능용)
     ktrade admin init|issue <아이디> [--role backtest|admin] [--days N]|list   관리자: 이용 코드 발급
     ktrade init | daily | plan [--asof] | run [--once] [--live-confirm]
     ktrade status | report | doctor [--offline] | schedule install|remove|show [--dry-run]
@@ -111,7 +111,7 @@ _INTRADAY_TEMPLATE = '''\
 """장중 조건 __ID__ — 장중에 '지금 사도 되나'를 판단한다. 고칠 곳은 아래 '── 1)'~'── 3)' 세 군데.
 
 쓰는 곳: ① 자동매매 탭 조건식의 '파이썬 확인' (조건검색 편입 종목을 사기 전에 한 번 더)
-        ② 백테스트 정식판 '계획에 쓸 매매조건'의 '장중 조건' (장 마감 후 고른 감시 목록을 장중에 지켜보다 매수)
+        ② 🧪 백테스트 '계획에 쓸 매매조건'의 '장중 조건' (장 마감 후 고른 감시 목록을 장중에 지켜보다 매수)
 데이터(ctx) — 실전은 키움 실시간, 백테스트는 받아 둔 1분봉:
   ctx.price 지금 가격 · ctx.minutes 오늘 1분봉(지금까지) · ctx.daily 어제까지 일봉 · ctx.now 지금 시각
   ctx.vwap() · ctx.day_open · ctx.day_high · ctx.prev_close · ctx.event('insert'|'watch') · ctx.insert_price(편입가)
@@ -188,10 +188,7 @@ def _cfg() -> dict:
 
 
 def _require_backtest() -> None:
-    from ktrade import access
-    if not access.can_backtest(access.current()):
-        sys.exit("백테스트는 이용 코드 로그인이 필요합니다 — ktrade access login (코드는 관리자에게 받습니다)\n"
-                 "코드 없이 예제 매매조건을 보려면: ktrade dashboard --open → 🧪 백테스트 체험판")
+    """예전엔 이용 코드가 필요했다. 0.9.3부터 백테스트는 모두에게 열려 있다."""
 
 
 def _docs_src() -> Path | None:
@@ -368,7 +365,7 @@ def cmd_new(a) -> None:
         sys.exit(str(exc))
     if kind == "intraday":
         print(f"만들었습니다(장중 조건): {d}\n  1) strategy.py 의 '── 1)~3)' 을 고치고\n  2) ktrade validate {a.id}\n"
-              "  3) 자동매매 탭 조건식의 '파이썬 확인' 또는 백테스트 정식판 '계획에 쓸 매매조건'의 '장중 조건'으로 붙이기")
+              "  3) 자동매매 탭 조건식의 '파이썬 확인' 또는 🧪 백테스트 '계획에 쓸 매매조건'의 '장중 조건'으로 붙이기")
     else:
         print(f"만들었습니다: {d}\n  1) strategy.py 에서 '종목 선정'과 '매수 타이밍' 두 곳을 고치고\n"
               f"  2) ktrade test {a.id}\n  3) config.yaml strategies.enabled 에 '- id: {a.id}' 추가")
@@ -497,7 +494,7 @@ def cmd_test(a) -> None:
     if not rep.ok:
         sys.exit(1)
     if "장중 조건(intraday)" in rep.render():
-        sys.exit("장중 조건은 혼자 백테스트하지 않습니다 — 대시보드 백테스트 정식판에서 매매조건에 붙여 실험하거나 "
+        sys.exit("장중 조건은 혼자 백테스트하지 않습니다 — 대시보드 🧪 백테스트에서 매매조건에 붙여 실험하거나 "
                  "'장중 조건' 탭의 조건식 편입 성적으로 보세요.")
     res, prev, path = _run_backtest(cfg, a.id, a.start, a.end, _json(a.params), _json(a.exits), a.note or "",
                                     a.symbols, a.symbols_file)
