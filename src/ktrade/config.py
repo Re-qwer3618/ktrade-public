@@ -55,12 +55,18 @@ DEFAULTS: dict = {
         "flatten_at": None,                # 시간 일괄청산 "15:15" — 이 시각 이후 보유 전량 매도 (단타용)
         "order_timeout_sec": None,         # 미체결 자동 취소(초) — 지나면 남은 수량 취소 (None = 다음 거래일까지 기다림)
     },
+    "priority": {                          # 장 마감 후 계획(plan)과 영웅문 조건식(hts)이 같은 계좌를 쓸 때 — engine/risk.py
+        "mode": "plan",                    # plan = 계획 우선 | hts = 선착순 | split = 나눠 쓰기
+        "plan_reserve": 2,                 # 계획 우선: 오늘 계획이 있으면 동시 보유·하루 매수 한도에서 이만큼 계획 몫으로 남김
+        "split": {"plan": {"positions": 3, "orders": 5}, "hts": {"positions": 2, "orders": 5}},   # 나눠 쓰기 한도
+    },
     "strategies": {
         "dirs": [],                        # 추가로 조건을 찾을 폴더 (KTRADE_HOME/strategies는 항상 포함)
         "enabled": [],                     # [{id: example_breakout, params: {...}, exits: {...}}] — 위에 있을수록 우선
         "require_backtest": True,          # 지금 설정으로 백테스트한 기록이 없는 조건은 계획을 만들지 않음
     },
     "external_plans": [],                  # [{id: my_strategy, dir: "C:/.../plans", use_engine_exits: false}]
+    "forward_test": [],                    # 체험판 조건식 테스트 — 관찰만 하는 조건식 이름 (hts_conditions와 합쳐 10개까지)
     "hts_conditions": [],                  # 영웅문 조건식 (장중 실시간 편입 신호) — 형식은 engine/signals.py DEFAULT_COND
     "collect": {                                            # 키움에서 받아 DB에 쌓을 범위 (사용자가 정함)
         "symbols": [], "symbols_file": None,                   # 종목 직접 지정. 비면 market_names 시장 전체
@@ -76,6 +82,10 @@ DEFAULTS: dict = {
         "tick": {"symbols": [], "units": [1], "start": None, "max_pages": 50},  # N틱봉 (키움은 최근 며칠만 줌)
     },
     "chart": {"ma": [5, 20, 60, 120], "volume_ma": [20]},     # 차트 이동평균선 (저장하지 않고 볼 때 계산)
+    "ai": {"provider": "claude",                               # AI 도우미(AI판 구독·관리자) — 본인 API 키, 모델 이름은 바꿀 수 있음
+           "models": {"claude": "claude-opus-5-5", "gemini": "gemini-2.5-pro", "openai": "gpt-5"}},
+    "schedule": {"daily": "16:30", "run": "08:50",          # 자동 실행 시각 (null = 그 작업 안 함) — ktrade schedule install
+                 "days": ["MON", "TUE", "WED", "THU", "FRI"]},
     "live": {"interval_sec": 60, "market_open": "09:00", "market_close": "15:30"},
 }
 
@@ -130,6 +140,12 @@ risk:
   order_timeout_sec: null       # 미체결 자동 취소(초). 예: 30 — 지나면 남은 수량 취소
   # 하루 손익 한도·시간 일괄청산은 계좌 단위라 백테스트(종목별 거래)에는 반영되지 않습니다.
 
+# 장 마감 후 계획과 영웅문 조건식이 같은 계좌를 쓸 때 (운영 탭 4단계에서도 바꿈)
+priority:
+  mode: plan                    # plan = 계획 우선(오늘 계획 종목은 조건식이 안 사고, 계획 몫 자리를 남김) | hts = 선착순 | split = 나눠 쓰기
+  plan_reserve: 2               # 계획 우선일 때 남겨 둘 자리 수 (오늘 계획 수보다 많으면 계획 수만큼)
+  split: {plan: {positions: 3, orders: 5}, hts: {positions: 2, orders: 5}}   # 나눠 쓰기: 출처별 동시 보유·하루 매수
+
 strategies:
   dirs: []
   require_backtest: true        # 백테스트 안 한 설정의 조건은 실행하지 않음 (조건을 바꾸면 ktrade test <id>)
@@ -153,6 +169,9 @@ hts_conditions: []
 #    max_buys_per_day: 3
 #    reentry: false
 #    exit_on_remove: false      # 조건 이탈에 매도 (매도 조건식 역할)
+
+# 백테스트 체험판의 조건식 테스트 — 주문 없이 관찰만, 신호를 쌓아 '그때 샀다면'으로 평가 (hts_conditions와 합쳐 10개까지)
+forward_test: []
 
 # 키움에서 받아 DB에 쌓을 범위 — ktrade collect / daily 가 이대로 받는다 (받아 둔 범위 확인: ktrade data)
 collect:
@@ -186,6 +205,12 @@ chart:
   ma: [5, 20, 60, 120]         # 가격 이동평균 (봉 개수)
   volume_ma: [20]              # 거래량 이동평균
 
+# 자동 실행 (ktrade schedule install 또는 대시보드 🗓️ 계획 탭) — 바꾼 뒤 다시 등록해야 작업 스케줄러에 반영됨
+schedule:
+  daily: "16:30"               # 장 마감 후: 수집 → 다음 거래일 계획 (null = 안 함)
+  run: "08:50"                 # 장 시작 전: 오늘 계획 실행, 장 마감까지 돎 (null = 안 함)
+  days: [MON, TUE, WED, THU, FRI]
+
 live:
   interval_sec: 60
 """
@@ -202,15 +227,24 @@ def _merge(base: dict, over: dict) -> dict:
     return out
 
 
+class _PlainDumper(yaml.SafeDumper):
+    """같은 객체가 여러 번 나와도 &id001/*id001 앵커 없이 풀어 쓴다 — 항목 블록을 따로 덤프해 한 파일에 합치므로
+    앵커가 남으면 블록끼리 이름이 겹쳐 파일이 깨진다 (조건식 여러 개가 같은 exits를 공유할 때 실제로 났음)."""
+
+    def ignore_aliases(self, data):
+        return True
+
+
 def update_sections(updates: dict, path: Path | None = None) -> Path:
     """config.yaml의 최상위 항목 몇 개만 바꿔 쓴다 (운영 화면 저장). 나머지 줄·주석은 그대로, 바꾸기 전 파일은 config.yaml.bak.
-    항목 블록 = 'key:' 줄부터 들여쓴 줄·빈 줄이 이어지는 데까지(뒤쪽 빈 줄은 남김). 없던 항목은 끝에 붙인다."""
+    항목 블록 = 'key:' 줄부터 들여쓴 줄·'- ' 목록 줄·빈 줄이 이어지는 데까지(뒤쪽 빈 줄은 남김). 없던 항목은 끝에 붙인다."""
     p = path or home() / "config.yaml"
     old = p.read_text(encoding="utf-8") if p.exists() else TEMPLATE
     lines = old.splitlines(keepends=True)
     for key, value in updates.items():
         flow = None if isinstance(value, (dict, list)) else False           # 값 하나면 '{key: v}'가 아니라 'key: v'
-        block = yaml.safe_dump({key: value}, allow_unicode=True, sort_keys=False, default_flow_style=flow, width=120)
+        block = yaml.dump({key: value}, Dumper=_PlainDumper, allow_unicode=True, sort_keys=False,
+                          default_flow_style=flow, width=120)
         start = next((i for i, ln in enumerate(lines) if ln.startswith(f"{key}:")), None)
         if start is None:
             if lines and not lines[-1].endswith("\n"):
@@ -218,7 +252,7 @@ def update_sections(updates: dict, path: Path | None = None) -> Path:
             lines.append(block)
             continue
         end = start + 1
-        while end < len(lines) and (lines[end][:1] in (" ", "\t") or not lines[end].strip()):
+        while end < len(lines) and (lines[end][:1] in (" ", "\t", "-") or not lines[end].strip()):  # '- ' = 목록 항목
             end += 1
         while end > start + 1 and not lines[end - 1].strip():
             end -= 1

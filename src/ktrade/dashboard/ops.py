@@ -75,8 +75,8 @@ def start_watch(cfg: dict, store: Store, now: datetime | None = None, popen=subp
     st = status(store, cfg, now)
     if st["hts_running"]:
         return {"ok": False, "reason": "이미 실행 중"}
-    if not cfg.get("hts_conditions"):
-        return {"ok": False, "reason": "조건식이 없습니다 — 1단계에서 고르고 저장하세요"}
+    if not cfg.get("hts_conditions") and not cfg.get("forward_test"):
+        return {"ok": False, "reason": "조건식이 없습니다 — 1단계에서 고르고 저장하세요 (또는 백테스트 체험판에서 테스트할 조건식)"}
     if not cfg["_secrets"].get("app_key"):
         return {"ok": False, "reason": "키움 로그인이 필요합니다 (조건검색은 키움 서버가 계산)"}
     logs = paths(cfg)["logs"]
@@ -201,9 +201,12 @@ COND_COLS = ["사용", "조건식", "모드", "매수 시작", "매수 끝", "�
 
 def conditions_table(cfg: dict) -> pd.DataFrame:
     from ktrade.engine.signals import DEFAULT_COND
-    rows = []
+    rows, seen = [], set()
     for c in cfg.get("hts_conditions") or []:
         c = {**DEFAULT_COND, **c}
+        if c["name"] in seen:                     # 예전 저장 버그로 겹친 항목 — 앞(새) 것만, 다음 저장 때 파일도 정리됨
+            continue
+        seen.add(c["name"])
         rows.append({"사용": True, "조건식": c["name"], "모드": "매매" if c.get("mode") == "trade" else "관찰",
                      "매수 시작": c["buy_window"][0], "매수 끝": c["buy_window"][1], "하루 매수 한도": int(c["max_buys_per_day"]),
                      "확인(초)": int(c.get("confirm_sec") or 0), "추격 한도%": float(c.get("chase_pct") or 0),
@@ -230,7 +233,7 @@ def conditions_from_table(df: pd.DataFrame, old: list[dict], exits: dict | None)
     return out
 
 
-def save_settings(cfg: dict, conds: list[dict], risk: dict) -> list[str]:
+def save_settings(cfg: dict, conds: list[dict], risk: dict, priority: dict | None = None) -> list[str]:
     """검사 → 저장. 오류가 있으면 저장하지 않고 오류 목록을 돌려준다."""
     from ktrade import config as C
     from ktrade.engine.signals import cond_exits, load_conditions
@@ -238,7 +241,7 @@ def save_settings(cfg: dict, conds: list[dict], risk: dict) -> list[str]:
     names = [c["name"] for c in conds]
     if len(set(names)) != len(names):
         errs.append("같은 조건식이 두 번 있음")
-    if len(names) > 10:
+    if len(set(names) | set(cfg.get("forward_test") or [])) > 10:
         errs.append("실시간 조건검색은 동시에 10개까지 (키움 한도)")
     try:
         for c in load_conditions({"hts_conditions": conds}):
@@ -253,7 +256,11 @@ def save_settings(cfg: dict, conds: list[dict], risk: dict) -> list[str]:
             errs.append(f"{k}는 0 이상")
     if errs:
         return errs
-    C.update_sections({"hts_conditions": conds, "risk": {**cfg["risk"], **risk}}, Path(cfg["_home"]) / "config.yaml")
+    if priority is not None and priority.get("mode") not in ("plan", "hts", "split"):
+        errs.append("우선순위는 plan · hts · split 중 하나")
+        return errs
+    C.update_sections({"hts_conditions": conds, "risk": {**cfg["risk"], **risk}, **({"priority": priority} if priority else {})},
+                      Path(cfg["_home"]) / "config.yaml")
     return []
 
 

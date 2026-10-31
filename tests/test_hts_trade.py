@@ -148,3 +148,58 @@ def test_episodes_group_flapping():
     from ktrade.engine.forward import episodes
     eps = episodes(pd.DataFrame(rows), 10)
     assert sorted(zip(eps.symbol, eps.price, eps.n_inserts)) == [("A", 1000, 6), ("A", 1100, 1), ("B", 500, 2)]
+
+
+def _plan(sym, pid, price):
+    return {"plan_id": pid, "symbol": sym, "name": sym, "rank": 1, "stop": None, "target": None, "max_hold_days": 5,
+            "entry": {"min_open": 0.01, "min_price": price * 0.9, "max_price": price * 1.1, "after": "09:00"},
+            "exits": X.resolve({"stop": {"type": "pct", "value": 2}, "stop_check": "intraday"})}
+
+
+def test_only_owner_manages_until_owner_engine_is_gone(tmp_path):
+    """A: 계획으로 산 종목은 ktrade run(plan)만 매도 판단 — hts 엔진은 run이 꺼졌을 때(heartbeat 오래됨)만 넘겨받는다."""
+    store = Store(tmp_path / "m.db")
+    broker = PaperBroker(tmp_path / "paper.json", 10_000_000)
+    px = {"A": 10000.0}
+    q = lambda s: {"price": px[s], "open": px[s]}  # noqa: E731
+    plan_ex = Executor(store, broker, Risk(10_000_000, max_position_pct=10), q, role="plan")
+    hts_ex = Executor(store, broker, Risk(10_000_000, max_position_pct=10), q, role="hts")
+    plan_ex.set_plans([("brk", "v1", _plan("A", "p-A", 10000))])
+    plan_ex.check("A", T0)
+    assert store.active_plan_trade("A")["status"] == "open"
+    px["A"] = 9700.0                                                          # -3% → 손절 조건 (장중 즉시)
+    store.set_setting("live.heartbeat", {"ts": T0.isoformat()})               # run 살아 있음
+    hts_ex.check("A", T0 + timedelta(seconds=30))
+    assert store.active_plan_trade("A") is not None and broker.position("A") == 100   # hts는 손대지 않음
+    hts_ex.check("A", T0 + timedelta(minutes=10))                             # run heartbeat 10분 전 → 꺼진 것으로 보고 넘겨받음
+    assert store.active_plan_trade("A") is None and broker.position("A") == 0
+
+
+def test_priority_plan_first_blocks_plan_symbols_and_reserves_slots(tmp_path):
+    """B: 계획 우선 — 오늘 계획 종목은 조건식이 안 사고, 계획 몫 자리를 남긴다. split·hts 모드도."""
+    store = Store(tmp_path / "m.db")
+    broker = PaperBroker(tmp_path / "paper.json", 10_000_000)
+    px = {s: 10000.0 for s in "ABCD"}
+    q = lambda s: {"price": px[s], "open": px[s]}  # noqa: E731
+    info = lambda today: ({"A"}, 2)  # noqa: E731                              오늘 계획 2건, 그중 A
+    risk = Risk(10_000_000, max_position_pct=5, max_concurrent_positions=3, priority={"mode": "plan", "plan_reserve": 2})
+    ex = Executor(store, broker, risk, q, role="hts", plan_info=info)
+    for s in "AB":
+        ex.add_plan("hts:c", "hts", {**_plan(s, f"h-{s}", 10000), "symbol": s})
+        ex.check(s, T0)
+    assert store.active_plan_trade("A") is None                              # 계획 종목
+    assert store.active_plan_trade("B") is not None                          # 3자리 중 계획 몫 2 → 조건식은 1자리
+    ex.add_plan("hts:c", "hts", _plan("C", "h-C", 10000))
+    ex.check("C", T0)
+    assert store.active_plan_trade("C") is None
+    why = store.query("SELECT detail FROM decisions WHERE detail LIKE 'h-C%'")["detail"].tolist()
+    assert any("계획 몫 2자리" in w for w in why) and any("계획에 있는 종목" in w
+                                                         for w in store.query("SELECT detail FROM decisions")["detail"])
+    ex.risk.priority = {"mode": "hts"}                                       # 선착순 — 막지 않음
+    ex.check("C", T0 + timedelta(seconds=1))
+    assert store.active_plan_trade("C") is not None
+    ex.risk.priority = {"mode": "split", "split": {"hts": {"positions": 2}}}
+    ex.add_plan("hts:c", "hts", _plan("D", "h-D", 10000))
+    ex.check("D", T0 + timedelta(seconds=2))
+    assert store.active_plan_trade("D") is None and any("나눠 쓰기" in w for w in
+                                                         store.query("SELECT detail FROM decisions WHERE detail LIKE 'h-D%'")["detail"])

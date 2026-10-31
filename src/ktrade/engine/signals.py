@@ -50,8 +50,12 @@ def cond_exits(c: dict) -> dict:
     return X.resolve(HTS_EXITS, ex)
 
 
+MAX_REALTIME = 10                   # 키움 실시간 조건검색 동시 등록 한도
+
+
 def load_conditions(cfg: dict, names: list[str] | None = None) -> list[dict]:
-    """config.yaml hts_conditions(+기본값). names를 주면 그 조건식만 — config에 없는 이름은 기본값(관찰)으로."""
+    """config.yaml hts_conditions(+기본값) + forward_test(체험판 조건식 테스트, 관찰로). names를 주면 그 조건식만 —
+    config에 없는 이름은 기본값(관찰)으로."""
     conf = {}
     for item in cfg.get("hts_conditions") or []:
         item = {"name": item} if isinstance(item, str) else dict(item)
@@ -59,7 +63,9 @@ def load_conditions(cfg: dict, names: list[str] | None = None) -> list[dict]:
             continue
         merged = copy.deepcopy(DEFAULT_COND)
         merged.update(item)
-        conf[str(item["name"])] = merged
+        conf.setdefault(str(item["name"]), merged)  # 이름이 겹치면 앞(새로 저장한) 것 — 예전 저장 버그로 뒤에 묵은 항목이 남은 파일 대비
+    for name in cfg.get("forward_test") or []:     # 운영에 없는 테스트용 조건식은 관찰만 (신호 일지 → 성적표)
+        conf.setdefault(str(name), {**copy.deepcopy(DEFAULT_COND), "name": str(name), "mode": "watch"})
     if names:
         return [conf.get(n) or {**copy.deepcopy(DEFAULT_COND), "name": n} for n in names]
     return list(conf.values())

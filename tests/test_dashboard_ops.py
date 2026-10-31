@@ -36,6 +36,19 @@ def test_update_sections_keeps_other_lines_and_comments(tmp_path):
     assert yaml.safe_load(p.read_text(encoding="utf-8"))["new_key"] == {"a": 1}
 
 
+def test_update_sections_shared_objects_and_repeated_saves(tmp_path):
+    """조건식 여러 개가 같은 exits dict를 공유해도 앵커(&id001) 없이 쓰고, 여러 번 저장해도 목록이 불어나지 않는다."""
+    p = tmp_path / "config.yaml"
+    p.write_text(C.TEMPLATE, encoding="utf-8")
+    ex = {"stop": {"type": "pct", "value": 3}}
+    conds = [{"name": "A", "exits": ex}, {"name": "B", "exits": ex}]
+    for n in (2, 2, 1, 3):
+        C.update_sections({"hts_conditions": (conds * 2)[:n], "risk": dict(C.DEFAULTS["risk"])}, p)
+        text = p.read_text(encoding="utf-8")
+        assert "&id" not in text and len(yaml.safe_load(text)["hts_conditions"]) == n
+    assert yaml.safe_load(text)["collect"]["market_names"] == ["거래소", "코스닥"]
+
+
 def test_settings_roundtrip_and_validation(home):
     home.mkdir(parents=True, exist_ok=True)
     (home / "config.yaml").write_text(C.TEMPLATE, encoding="utf-8")
@@ -145,3 +158,18 @@ def test_ops_tab_renders_and_saves(home):
     next(b for b in at.button if b.label == "정지하고 전량 매도").click()
     at.run()
     assert halt_state(Store(home / "data" / "market.db"), datetime.now().strftime("%Y-%m-%d"))
+
+
+def test_duplicated_conditions_from_old_save_bug(home):
+    """예전 저장 버그로 '- name:' 묵은 항목이 뒤에 남은 config — 앞(새) 것을 쓰고, 다시 저장하면 정리된다."""
+    home.mkdir(parents=True, exist_ok=True)
+    text = C.TEMPLATE.replace("hts_conditions: []", "hts_conditions:\n- name: A\n  mode: trade\n- name: A\n  mode: watch", 1)
+    assert text != C.TEMPLATE
+    (home / "config.yaml").write_text(text, encoding="utf-8")
+    cfg = C.load()
+    from ktrade.engine.signals import load_conditions
+    assert [c["mode"] for c in load_conditions(cfg)] == ["trade"]
+    df = ops.conditions_table(cfg)
+    assert df["조건식"].tolist() == ["A"]
+    assert ops.save_settings(cfg, ops.conditions_from_table(df, cfg["hts_conditions"], None), {}) == []
+    assert [c["name"] for c in C.load()["hts_conditions"]] == ["A"]

@@ -128,7 +128,7 @@ def _require_backtest() -> None:
     from ktrade import access
     if not access.can_backtest(access.current()):
         sys.exit("백테스트는 이용 코드 로그인이 필요합니다 — ktrade access login (코드는 관리자에게 받습니다)\n"
-                 "가상 데이터로 먼저 보려면: ktrade dashboard --open → 체험 모드")
+                 "코드 없이 예제 매매조건을 보려면: ktrade dashboard --open → 🧪 백테스트 체험판")
 
 
 def _docs_src() -> Path | None:
@@ -173,7 +173,7 @@ def cmd_init(a) -> None:
           "아직 없음 ← 대시보드(ktrade dashboard --open)의 로그인 화면 또는 ktrade login 으로 입력"))
     if docs:
         print(f"  문서 {h / 'docs'}  ← 매매조건 작성 가이드(CONDITION_GUIDE.md), AI에게 붙여 넣는 규격(LLM_CONTEXT.md)")
-    print("키 없이 먼저 둘러보려면: ktrade dashboard --open → '체험 모드'")
+    print("대시보드: ktrade dashboard --open → 키움 로그인 (차트 데이터 없이도 운영 탭을 씀)")
     print("다음: ktrade collect --limit 100   (또는 ktrade import-db <기존 DB 경로>)")
     print("매매조건(종목 선정·매수 타이밍)은 직접 만듭니다: ktrade new <이름> → ktrade test <이름>")
 
@@ -665,8 +665,20 @@ def _hts_watch(a, cfg: dict, server: str) -> None:
         from ktrade.engine.executor import Executor
         from ktrade.engine.risk import Risk
         broker = build_broker(cfg, store)
+        from ktrade.engine.planner import load_for_today
+        plan_cache: dict[str, tuple[set, int]] = {}
+
+        def plan_info(today: str) -> tuple[set, int]:     # 계획 우선 판단용 — 오늘 실행할 장 마감 후 계획
+            if today not in plan_cache:
+                try:
+                    items, _ = load_for_today(cfg, store, today)
+                except Exception:
+                    items = []
+                plan_cache[today] = ({p["symbol"] for _, _, p in items}, len(items))
+            return plan_cache[today]
+
         executor = Executor(store, broker, Risk.from_config(cfg, broker.total_deposit()),
-                            lambda s: {"price": price(s), "open": price(s)} if price(s) else {})
+                            lambda s: {"price": price(s), "open": price(s)} if price(s) else {}, role="hts", plan_info=plan_info)
 
     def price(sym: str) -> float | None:
         nonlocal rest
@@ -885,8 +897,15 @@ def cmd_doctor(a, exit_on_fail: bool = True) -> None:
 
 def cmd_schedule(a) -> None:
     from ktrade.engine import schedule
-    print(schedule.install(a.dry_run) if a.action == "install" else schedule.remove(a.dry_run) if a.action == "remove"
-          else schedule.status())
+    cfg = _cfg()
+    if a.action == "install":
+        print(schedule.install(a.dry_run, cfg))
+    elif a.action == "remove":
+        print(schedule.remove(a.dry_run))
+    else:
+        s = schedule.settings(cfg)
+        print(f"설정: daily {s['daily'] or '안 함'} · run {s['run'] or '안 함'} · {','.join(s['days'])}  (config.yaml schedule)")
+        print(schedule.status())
 
 
 def _port_open(port: int) -> bool:

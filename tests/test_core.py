@@ -257,3 +257,21 @@ def test_live_refuses_real_account_without_confirm(cfg):
     cfg["broker"], cfg["kiwoom"]["is_mock"] = "kiwoom", False
     with pytest.raises(SystemExit, match="--live-confirm"):
         live.run(cfg, once=True)
+
+
+def test_planner_hts_filter_keeps_only_condition_matches(market, cfg):
+    """매매조건 + 영웅문 조건식 조합: 조건식에도 걸린 종목만 계획, 조회 실패면 그 조건은 계획 없음."""
+    store, days = market
+    cfg["strategies"]["require_backtest"] = False
+    cfg["strategies"]["enabled"][0]["hts_filter"] = "내조건식"
+    base = planner.run_plans(cfg, store, days[59], hts_scan=lambda n: {"AAA001", "BBB002", "CCC003"})
+    assert base["strategies"] == {"example_breakout": 1}
+    res = planner.run_plans(cfg, store, days[59], hts_scan=lambda n: set())
+    assert res["strategies"] == {"example_breakout": 0}
+    rej = json.loads((paths(cfg)["plans"] / days[59] / "_rejected.json").read_text(encoding="utf-8"))
+    assert any("영웅문 조건식 '내조건식'에 없음" in r["reason"] for r in rej["rejected"])
+
+    def boom(n):
+        raise RuntimeError("연결 끊김")
+    res = planner.run_plans(cfg, store, days[59], hts_scan=boom)
+    assert "example_breakout" not in res["strategies"] and "조회 실패" in res["errors"]["example_breakout"]

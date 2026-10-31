@@ -208,6 +208,17 @@ def is_admin(info: dict | None) -> bool:
     return bool(info) and info.get("role") == "admin"
 
 
+def ai_subscribed() -> bool:
+    """AI판 구독 — 이용 코드와 따로 파는 월 구독(결제 후 사용자 본인 API 키로 Claude·Gemini·ChatGPT 연결).
+    결제 연동은 출시 때 붙인다. 그 전까지는 구독자가 없고 관리자만 쓴다."""
+    return False
+
+
+def can_ai(info: dict | None) -> bool:
+    """AI 기능(백테스트 분석·매매조건 작성 도우미) — 관리자는 항상, 그 밖에는 AI판 구독자만."""
+    return is_admin(info) or ai_subscribed()
+
+
 def describe(info: dict | None) -> str:
     if not info:
         return "없음"

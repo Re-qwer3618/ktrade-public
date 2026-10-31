@@ -81,7 +81,7 @@ def run(cfg: dict, live_confirm: bool = False, once: bool = False, quote_source=
         quote_source = KiwoomData(cfg)
     risk = Risk.from_config(cfg, broker.total_deposit())
     board = QuoteBoard(quote_source)
-    ex = Executor(store, broker, risk, board.quote)
+    ex = Executor(store, broker, risk, board.quote, role="plan")
     loaded_for = holiday_noted = ""
     started = now_fn()
     log.info(f"시작: broker={cfg['broker']} is_mock={cfg['kiwoom'].get('is_mock', True)}")

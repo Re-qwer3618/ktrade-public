@@ -9,6 +9,9 @@
   계좌 정지(긴급 정지·하루 손익 한도) / 시간 일괄청산(risk.flatten_at) → 손절 · 추적 손절 · 사용자 장중 손절 % → 분할익절
   → 목표가 · 보유기간 만료(15:15 이후) → (안 팔았으면) 다음 분할매수 차수
 미체결: risk.order_timeout_sec가 지나면 남은 수량을 취소하고 체결된 만큼만 기록한다(없으면 다음 거래일까지 기다림).
+누가 관리하나(role): ktrade run(plan)과 hts watch(hts)가 따로 돌며 같은 계좌·DB를 쓴다. 보유 종목의 매도 판단은 그 종목을 산 쪽만
+한다(조건 id가 'hts:'로 시작하면 hts) — 둘이 같은 순간 매도 주문을 겹쳐 내지 않게. 산 쪽 엔진이 꺼져 있으면(heartbeat가 오래됨)
+다른 쪽이 넘겨받는다. role=None은 전부 관리(단독 실행·테스트).
 """
 from __future__ import annotations
 
@@ -25,6 +28,7 @@ from ktrade.engine import exits as X
 from ktrade.engine.risk import Risk
 
 log = logging.getLogger("ktrade.executor")
+OWNER_HEARTBEAT = {"plan": ("live.heartbeat", 180), "hts": ("hts.heartbeat", 30)}   # (설정 키, 이 초보다 오래되면 꺼진 것)
 HALT_KEY = "trading.halt"        # {date, reason, flatten, at} — 그날만 유효
 PNL_KEY = "trading.pnl"          # {date, realized, unrealized, total, at} — 화면 표시용
 
@@ -45,6 +49,11 @@ def _load(v, default):
     if _blank(v):
         return default
     return json.loads(v) if isinstance(v, str) else v
+
+
+def source_of(strategy: str) -> str:
+    """매매 기록의 출처 — 'hts'(영웅문 조건식 장중 계획) | 'plan'(장 마감 후 계획)."""
+    return "hts" if str(strategy or "").startswith("hts:") else "plan"
 
 
 def _date(trade: dict) -> str | None:
@@ -125,8 +134,10 @@ def daily_pnl(store: Store, quote_fn, today: str) -> dict:
 
 
 class Executor:
-    def __init__(self, store: Store, broker: Broker, risk: Risk, quote_fn):
+    def __init__(self, store: Store, broker: Broker, risk: Risk, quote_fn, role: str | None = None, plan_info=None):
         self.store, self.broker, self.risk, self.quote_fn = store, broker, risk, quote_fn
+        self.role = role                    # "plan" | "hts" | None(전부)
+        self.plan_info = plan_info          # today -> (계획 종목 set, 계획 수) — 우선순위 판단용 (risk.priority_block)
         self.plans: dict[str, tuple[str, str, dict]] = {}   # 종목 → (조건, 버전, 계획)
         self._noted: set[str] = set()
 
@@ -140,6 +151,18 @@ class Executor:
 
     def symbols(self) -> list[str]:
         return sorted(set(self.plans) | set(self.store.active_plan_symbols()))
+
+    def owns(self, trade: dict, now: datetime) -> bool:
+        """이 엔진이 이 보유 종목의 매도를 판단하나 — 산 쪽이거나, 산 쪽 엔진이 꺼져 있으면."""
+        src = source_of(trade.get("strategy"))
+        if self.role is None or src == self.role:
+            return True
+        key, fresh = OWNER_HEARTBEAT[src]
+        try:
+            age = (now - datetime.fromisoformat((self.store.get_setting(key) or {})["ts"])).total_seconds()
+        except (KeyError, TypeError, ValueError):
+            return True
+        return age > fresh
 
     def _note_once(self, key: str, sid: str, symbol: str, signal: str, detail: str, now: datetime) -> None:
         if key not in self._noted:
@@ -170,7 +193,7 @@ class Executor:
     def force_exit(self, symbol: str, reason: str, now: datetime) -> bool:
         """보유 중인 이 종목을 지금 판다 (조건식 이탈 매도 등). 주문을 냈으면 True."""
         trade = self.store.active_plan_trade(symbol)
-        if trade is None or trade["status"] != "open":
+        if trade is None or trade["status"] != "open" or not self.owns(trade, now):
             return False
         fills, sells, pend = book(trade)
         if pend:
@@ -190,12 +213,16 @@ class Executor:
         if not price:
             return
         if trade is not None:
-            self._manage(trade, symbol, position, float(price), now, today)
+            if self.owns(trade, now):
+                self._manage(trade, symbol, position, float(price), now, today)
             return
-        if symbol not in self.plans or position > 0:
+        if symbol not in self.plans:
             return
         sid, ver, plan = self.plans[symbol]
         pid, e = plan["plan_id"], plan["entry"]
+        if position > 0:
+            self._note_once(pid + ":held", sid, symbol, "PLAN_SKIP", f"{pid} 이미 보유 중인 종목 (다른 매매·수동) — 매수 안 함", now)
+            return
         if self.store.plan_trade_exists(pid, today) or _hhmm(now) < e["after"]:
             return
         halt = halt_state(self.store, today)
@@ -209,7 +236,8 @@ class Executor:
         if not (e["min_price"] < price <= e["max_price"]):
             self._note_once(pid + ":price", sid, symbol, "PLAN_WAIT", f"{pid} 현재가 {price:,.0f}가 매수 구간 밖 — 계속 확인", now)
             return
-        why = self.risk.can_buy(self.store, self.broker, today, _hhmm(now))
+        why = self.risk.can_buy(self.store, self.broker, today, _hhmm(now), source=source_of(sid), symbol=symbol,
+                                plan_info=self.plan_info)
         if why:
             self._note_once(pid + ":risk", sid, symbol, "PLAN_SKIP", f"{pid} {why}", now)
             return

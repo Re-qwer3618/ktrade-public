@@ -91,24 +91,50 @@ def test_dashboard_tabs_by_access(home, monkeypatch):
     pytest.importorskip("streamlit")
     from streamlit.testing.v1 import AppTest
 
-    from ktrade import demo
     from test_dashboard_ops import APP, _filled_store
     home.mkdir(parents=True, exist_ok=True)
     (home / "config.yaml").write_text(config_mod.TEMPLATE, encoding="utf-8")
     _filled_store(home / "data", "market.db")
-    at = AppTest.from_file(str(APP), default_timeout=60).run()                 # 관리자 코드(conftest)
+    at = AppTest.from_file(str(APP), default_timeout=60).run()                 # 관리자 코드(conftest) → 정식판 + AI + 관리자
     assert not at.exception, at.exception
     tabs = [t.label for t in at.tabs]
-    assert "🧪 백테스트" in tabs and tabs[-1] == "🛠️ 관리자"
+    assert "🧪 백테스트 정식판" in tabs and "🛠️ 관리자" in tabs
+    assert any("AI 기능 사용 가능" in x.value for x in at.sidebar.success)                # 관리자 = AI판
     monkeypatch.delenv("KTRADE_ACCESS_CODE")
-    at = AppTest.from_file(str(APP), default_timeout=60).run()                 # 로그인 안 함 → 기본 기능 + 잠긴 백테스트
+    at = AppTest.from_file(str(APP), default_timeout=60).run()                 # 코드 없음 → 기본 기능 + 체험판
     assert not at.exception, at.exception
     tabs = [t.label for t in at.tabs]
-    assert tabs[0] == "🕹️ 운영" and "🧪 백테스트 🔒" in tabs and "🛠️ 관리자" not in tabs
-    assert any(b.label == "🔓 백테스트 로그인" for b in at.sidebar.button)
-    demo.build(config_mod.load(), n_days=160, plan_days=2)
-    at = AppTest.from_file(str(APP), default_timeout=60)
-    at.session_state["mode"] = "demo"
-    at.run()                                                                    # 체험 모드 → 백테스트만
+    assert tabs[0] == "🕹️ 운영" and "🧪 백테스트 체험판" in tabs and "🛠️ 관리자" not in tabs
+    assert any(b.label == "🔓 백테스트 정식판 로그인" for b in at.sidebar.button)
+
+
+def test_dashboard_without_chart_data(home, monkeypatch):
+    """키움 키만 있고 차트 데이터가 없어도 운영·조건식 등 기본 화면이 열린다 (데이터는 백테스트용 선택)."""
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+
+    from test_dashboard_ops import APP
+    from ktrade import credentials
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.yaml").write_text(config_mod.TEMPLATE, encoding="utf-8")
+    monkeypatch.setattr(credentials, "get", lambda n: "x" if n.startswith("KIWOOM") else "")
+    monkeypatch.delenv("KTRADE_ACCESS_CODE")
+    at = AppTest.from_file(str(APP), default_timeout=60).run()
     assert not at.exception, at.exception
-    assert [t.label for t in at.tabs] == ["🧪 백테스트 (체험)", "❓ 사용법"]
+    tabs = [t.label for t in at.tabs]
+    assert tabs[0] == "🕹️ 운영" and "🗓️ 계획" in tabs
+    assert any(m.label == "마지막 일봉" and m.value == "받지 않음 (선택)" for m in at.metric)
+
+
+def test_ai_access_and_parsing(monkeypatch):
+    """AI판: 관리자만(구독 결제 전), 키 없으면 친절한 오류, 답에서 두 파일 꺼내기."""
+    from ktrade import ai, credentials
+    assert access.can_ai({"role": "admin"}) and not access.can_ai({"role": "backtest"}) and not access.can_ai(None)
+    monkeypatch.setattr(credentials, "get", lambda n: "")
+    with pytest.raises(ai.AiError, match="API 키가 없습니다"):
+        ai.ask({}, "s", "p", "gemini")
+    y, py = ai.parse_files("설명\n```yaml\nid: x\n```\n그리고\n```python\nclass X: pass\n```")
+    assert y == "id: x\n" and py == "class X: pass\n"
+    with pytest.raises(ai.AiError):
+        ai.parse_files("코드 없음")
+    assert ai.settings({"ai": {"models": {"gemini": "g-x"}}})["models"] == {**config_mod.DEFAULTS["ai"]["models"], "gemini": "g-x"}

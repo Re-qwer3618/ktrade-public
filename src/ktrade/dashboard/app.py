@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -18,7 +19,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from ktrade import __version__, access, credentials, demo
+from ktrade import __version__, access, credentials
 from ktrade import config as config_mod
 from ktrade.config import paths
 from ktrade.data.store import Store
@@ -26,7 +27,6 @@ from ktrade.engine import report
 
 st.set_page_config(page_title="ktrade", page_icon="📈", layout="wide")
 ss = st.session_state
-ss.setdefault("mode", None)          # None = 내 데이터, "demo" = 체험 모드
 ss.setdefault("page", None)          # None | "login" | "access"
 
 base = config_mod.load()
@@ -48,11 +48,6 @@ def check_key(app_key: str, app_secret: str, mock: bool) -> float | None:
 def sidebar() -> None:
     sb = st.sidebar
     sb.markdown(f"### 📈 ktrade `{__version__}`")
-    if ss.mode == "demo":
-        sb.info("🧪 체험 모드 — 가상 데이터")
-        if sb.button("체험 모드 나가기", width="stretch"):
-            ss.mode = None
-            st.rerun()
     if has_key:
         sb.success(f"🔑 키움 연결 정보 저장됨 ({'모의투자' if is_mock else '실전'})\n\n앱키 {credentials.mask(base['_secrets']['app_key'])}")
         c1, c2 = sb.columns(2)
@@ -67,17 +62,13 @@ def sidebar() -> None:
             ss.page = "login"
             st.rerun()
     if acc:
-        sb.success(f"🔓 백테스트 이용 중\n\n{access.describe(acc)}")
+        sb.success(f"🔓 백테스트 정식판\n\n{access.describe(acc)}" + ("\n\n🤖 AI 기능 사용 가능" if access.can_ai(acc) else ""))
         if sb.button("백테스트 로그아웃", width="stretch"):
             access.logout()
             st.rerun()
     elif ss.page != "access":
-        if sb.button("🔓 백테스트 로그인", width="stretch", help="관리자에게 받은 아이디·이용 코드로 로그인하면 백테스트가 열립니다"):
+        if sb.button("🔓 백테스트 정식판 로그인", width="stretch", help="관리자에게 받은 아이디·이용 코드로 로그인하면 내 매매조건 백테스트가 열립니다"):
             ss.page = "access"
-            st.rerun()
-    if ss.mode != "demo" and ss.page is None:
-        if sb.button("🧪 체험 모드 (백테스트 맛보기)", width="stretch"):
-            ss.mode = "demo"
             st.rerun()
     sb.divider()
     sb.caption("주문은 운영 탭에서 시작한 엔진이 냅니다(paper·키움 모의, 실전은 동의 뒤). 수익을 보장하지 않습니다.")
@@ -146,9 +137,9 @@ def access_form(key_prefix: str = "access") -> None:
 
 
 def page_access() -> None:
-    st.title("🔓 백테스트 로그인")
-    st.markdown("백테스트(매매조건 실험)는 **이용 코드**로 추가 로그인해야 쓸 수 있습니다. 키움 앱키 로그인과는 따로입니다.\n\n"
-                "코드가 없으면 관리자에게 요청하세요. 가상 데이터로 미리 보려면 사이드바의 **체험 모드**.")
+    st.title("🔓 백테스트 정식판 로그인")
+    st.markdown("내 매매조건 백테스트와 '계획에 쓸 매매조건 켜기'는 **이용 코드**로 추가 로그인해야 씁니다. 키움 앱키 로그인과는 따로입니다.\n\n"
+                "코드가 없으면 관리자에게 요청하세요. 코드 없이도 🧪 백테스트 탭의 **체험판**(예제 매매조건 · 조건식 테스트)은 씁니다.")
     access_form()
     if st.button("← 돌아가기"):
         ss.page = None
@@ -172,30 +163,20 @@ def page_welcome() -> None:
     c1.markdown("**1. 키움 앱키 로그인**\n\n내 키움 REST API 앱키를 넣습니다. 키는 이 PC에만 저장됩니다.")
     c2.markdown("**2. 자동매매 (기본 기능)**\n\n영웅문 조건식·손절·익절·분할매매·계좌 한도를 정하고 운영 탭에서 시작합니다. "
                 "가상 체결 → 모의투자 → (동의 뒤) 실전.")
-    c3.markdown("**3. 백테스트 (추가 로그인)**\n\n내 매매조건을 과거 일봉으로 실험합니다. 관리자에게 받은 이용 코드로 로그인하면 열립니다.")
+    c3.markdown("**3. 백테스트**\n\n**체험판**: 예제 매매조건을 내가 받은 키움 데이터로 실험, 영웅문 조건식은 실제 신호를 쌓아 평가. "
+                "**정식판**(이용 코드): 내 매매조건 실험 · 계획에 켜기.")
     st.divider()
-    left, right = st.columns(2, gap="large")
+    left, right = st.columns([3, 2], gap="large")
     with left:
         st.subheader("🔑 키움 앱키로 시작")
         login_form("welcome_login")
-        key_help()
     with right:
-        st.subheader("🧪 체험 모드 — 백테스트 맛보기")
-        st.markdown("키 없이, 가상 종목·가상 시세로 **백테스트** 화면을 써 봅니다.\n\n"
-                    "- 예제 매매조건 2개의 백테스트 결과\n- 직접 다시 돌려 보기 (기간 바꾸기)\n- 실험 기록 비교\n\n"
-                    "실제 시세가 아니라 숫자에는 의미가 없습니다. 처음 한 번 준비하는 데 30초쯤 걸립니다.")
-        if st.button("체험 모드 시작", type="primary"):
-            ss.mode = "demo"
-            st.rerun()
+        st.subheader("처음이라면")
+        st.markdown("- **모의투자 키**로 시작하세요 — 실전 키여도 동의 전에는 주문하지 않습니다.\n"
+                    "- 로그인하면 바로 운영 탭(조건식 자동매매)을 씁니다. **차트 데이터는 받지 않아도 됩니다** — "
+                    "백테스트·계획에 쓸 때만 📥 데이터 탭에서 골라 받습니다.")
+        key_help()
     st.caption("키움증권과 무관한 개인 프로젝트입니다. 투자 조언이 아니며 수익을 보장하지 않습니다.")
-
-
-def ensure_demo() -> dict:
-    if not demo.ready(base):
-        with st.status("체험 모드 준비 중… (처음 한 번, 30초쯤)", expanded=True) as s:
-            demo.build(base, progress=s.write)
-            s.update(label="준비 완료", state="complete")
-    return demo.config(base)
 
 
 class _StatusLog(logging.Handler):
@@ -244,41 +225,41 @@ def data_location(cfg: dict) -> None:
     st.rerun()
 
 
-def page_collect() -> None:
+def quick_collect(cfg: dict, key: str = "qc") -> None:
+    """몇 종목 일봉 빨리 받기 — 백테스트·계획용 (운영·조건식 매매에는 필요 없음)."""
     from ktrade.data.collect import collect, parse_codes, resolve_scope
-    st.title("📥 시세 받기")
-    st.markdown("키움 연결 정보는 저장됐습니다. 이제 실험에 쓸 **일봉 데이터**를 받습니다. 몇 종목이면 몇 초~몇 분이면 끝납니다.")
-    syms = st.text_input("받을 종목 코드 (쉼표로 구분)", SAMPLE, help="기본값: 시가총액 상위 몇 종목")
-    years = st.slider("기간 (년)", 1, 10, 3)
-    st.caption("시장 전체(약 2,500종목)는 처음에 몇 시간 걸립니다 → 바탕화면 'ktrade 명령창'에서 `ktrade collect`.")
-    if st.button("받기", type="primary"):
+    if not has_key:
+        st.info("키움 로그인 뒤 받을 수 있습니다.")
+        return
+    c1, c2, c3 = st.columns([4, 1, 1], vertical_alignment="bottom")
+    syms = c1.text_input("받을 종목 코드 (쉼표로 구분)", SAMPLE, help="기본값: 시가총액 상위 몇 종목", key=f"{key}_syms")
+    years = c2.number_input("기간 (년)", 1, 10, 3, key=f"{key}_years")
+    go_ = c3.button("받기", type="primary", key=f"{key}_go", width="stretch")
+    st.caption("시장 전체(약 2,500종목)는 처음에 몇 시간 걸립니다 → 아래 받을 범위를 정하고 'ktrade 명령창'에서 `ktrade collect`.")
+    if not go_:
+        return
+    try:
+        codes = parse_codes(syms.split(","))
+        scope = resolve_scope(cfg, symbols=codes, years=int(years))
+    except ValueError as exc:
+        st.error(str(exc))
+        return
+    with st.status(f"{len(codes)}종목 받는 중…", expanded=True) as box:
+        h = _StatusLog(box)
+        log = logging.getLogger("ktrade")
+        log.addHandler(h)
+        log.setLevel(logging.INFO)
         try:
-            codes = parse_codes(syms.split(","))
-            scope = resolve_scope(base, symbols=codes, years=years)
-        except ValueError as exc:
-            st.error(str(exc))
+            res = collect(Store(paths(cfg)["db"]), cfg, scope)
+        except Exception as exc:
+            box.update(label="실패", state="error")
+            st.error(f"받기 실패: {str(exc)[:300]}")
             return
-        with st.status(f"{len(codes)}종목 받는 중…", expanded=True) as box:
-            h = _StatusLog(box)
-            log = logging.getLogger("ktrade")
-            log.addHandler(h)
-            log.setLevel(logging.INFO)
-            try:
-                res = collect(Store(paths(base)["db"]), base, scope)
-            except Exception as exc:
-                box.update(label="실패", state="error")
-                st.error(f"받기 실패: {str(exc)[:300]}")
-                return
-            finally:
-                log.removeHandler(h)
-            box.update(label=f"완료 — {res['symbols']}종목 · 일봉 {res['bars']:,}개", state="complete")
-        if res["failed"]:
-            st.warning(f"못 받은 종목: {', '.join(res['failed'])}")
-        st.button("대시보드 열기", type="primary", on_click=lambda: None)
-    with st.expander("📁 저장 위치 (받기 전에 다른 드라이브로 바꿀 수 있음)"):
-        data_location(base)
-    with st.expander("다른 PC에서 받아 둔 DB가 있다면"):
-        st.code("ktrade import-db <DB 파일 경로>", language="bash")
+        finally:
+            log.removeHandler(h)
+        box.update(label=f"완료 — {res['symbols']}종목 · 일봉 {res['bars']:,}개", state="complete")
+    if res["failed"]:
+        st.warning(f"못 받은 종목: {', '.join(res['failed'])}")
 
 
 # ───────────────────────── 본 화면 ─────────────────────────
@@ -304,22 +285,137 @@ def run_backtest(cfg: dict, sid: str, years: float) -> None:
     st.toast(f"{sid}: 거래 {res.get('trades', 0)}건 — 기록에 추가했습니다")
 
 
-def tab_lab_locked() -> None:
-    st.markdown("### 🔒 백테스트는 추가 로그인이 필요합니다")
-    st.markdown("내 매매조건을 과거 일봉으로 돌려 승률·평균 수익·시장 대비 성과를 보는 기능입니다. "
-                "관리자에게 받은 **아이디·이용 코드**로 로그인하세요. (가상 데이터로 미리 보기: 사이드바 **체험 모드**)")
-    access_form("lab_access")
+def is_example(info) -> bool:
+    from ktrade.engine.loader import bundled_dir
+    b = bundled_dir()
+    return bool(b) and str(info.source).startswith(str(b))
 
 
-def tab_lab(cfg: dict, store: Store) -> None:
-    from ktrade.engine import experiments, loader
+def tab_trial(cfg: dict, store: Store) -> None:
+    """체험판 — 예제 매매조건을 내가 받은 키움 데이터로 · 영웅문 조건식은 실제 신호를 쌓아 평가 (10개까지 골라서)."""
+    st.info("**체험판** — 예제 매매조건을 **내가 키움에서 받은 데이터**로 백테스트하고, 영웅문 조건식은 실제 편입 신호를 쌓아 "
+            "'그때 샀다면'으로 평가합니다. 내 매매조건 실험·계획에 켜기는 **정식판**(이용 코드).", icon=":material/science:")
+    t1, t2, t3 = st.tabs(["예제 매매조건", "영웅문 조건식 테스트", "🔓 정식판 로그인"])
+    with t1:
+        tab_lab(cfg, store, examples_only=True)
+    with t2:
+        trial_forward(cfg, store)
+    with t3:
+        st.markdown("관리자에게 받은 **아이디·이용 코드**로 로그인하면 내 매매조건 백테스트와 '계획에 쓸 매매조건 켜기'가 열립니다.")
+        access_form("lab_access")
+
+
+def trial_forward(cfg: dict, store: Store) -> None:
+    """테스트할 조건식 고르기(config forward_test, 운영 조건식과 합쳐 10개까지) → 엔진이 관찰 → 신호별 '그때 샀다면'."""
+    from ktrade.dashboard import ops
+    from ktrade.engine import forward
+    from ktrade.engine.signals import MAX_REALTIME
+    s = ops.status(Store(paths(cfg)["db"]), cfg)
+    ops_names = [c["name"] for c in cfg.get("hts_conditions") or []]
+    cur = list(cfg.get("forward_test") or [])
+    st.markdown("키움 조건검색식은 과거 날짜에 어떤 종목이 걸렸는지 주지 않아 **과거 백테스트가 안 됩니다**. 대신 고른 조건식을 "
+                "장중에 **주문 없이 관찰**해 편입 신호를 쌓고, 신호 종목의 1분봉으로 '그때 샀다면' 결과를 매깁니다. 쓸수록 정확해집니다.")
+    if st.button("키움에서 내 조건식 목록 불러오기", icon=":material/download:", disabled=s["hts_running"] or not has_key,
+                 key="trial_list", help="엔진 실행 중에는 못 씀(계정당 웹소켓 하나)"):
+        from ktrade.data.hts import HtsClient
+        try:
+            with st.spinner("조건식 목록 받는 중…"):
+                ss.trial_listed = [c.name for c in HtsClient(cfg).list()]
+        except Exception as exc:
+            st.error(f"목록을 못 받았습니다: {exc}")
+    options = list(dict.fromkeys((ss.get("trial_listed") or []) + cur))
+    room = MAX_REALTIME - len([n for n in ops_names if n not in options])
+    with st.form("trial_form", border=False):
+        pick = st.multiselect(f"테스트할 조건식 (최대 {room}개 — 운영 탭 조건식 {len(ops_names)}개와 합쳐 {MAX_REALTIME}개까지)",
+                              options, default=[n for n in cur if n in options], max_selections=max(room, 0),
+                              placeholder="먼저 위 버튼으로 목록을 불러오세요")
+        save = st.form_submit_button("저장", type="primary")
+    if save:
+        if len(set(pick) | set(ops_names)) > MAX_REALTIME:
+            st.error(f"운영 조건식과 합쳐 {MAX_REALTIME}개를 넘습니다.")
+        else:
+            config_mod.update_sections({"forward_test": pick}, Path(cfg["_home"]) / "config.yaml")
+            st.toast("저장했습니다 — 엔진을 (다시) 시작하면 관찰합니다")
+            st.rerun()
+    c1, c2 = st.columns([2, 1], vertical_alignment="center")
+    if s["hts_running"]:
+        hb = s["hts"].get("conds") or []
+        missing = [n for n in cur if n not in hb]
+        c1.success("엔진이 관찰 중입니다" + (f" — 새로 고른 {', '.join(missing)}은(는) 엔진을 다시 시작해야 들어갑니다" if missing else ""))
+        if c2.button("엔진 중지", key="trial_stop", disabled=s["stop_pending"]):
+            ops.stop_watch(Store(paths(cfg)["db"]))
+            st.rerun()
+    else:
+        c1.caption("엔진이 꺼져 있습니다. 장중(09:00~15:30)에 켜 두면 신호가 쌓입니다. 운영 탭의 조건식 엔진과 같은 엔진입니다.")
+        if c2.button("관찰 시작", type="primary", key="trial_start", disabled=not cur):
+            res = ops.start_watch(cfg, Store(paths(cfg)["db"]))
+            (st.toast if res["ok"] else st.error)("시작했습니다" if res["ok"] else res["reason"])
+    if not cur:
+        return
+    try:
+        days = store.query("SELECT DISTINCT date FROM condition_signals ORDER BY date DESC")["date"].tolist()
+    except Exception:
+        days = []
+    if not days:
+        st.info("아직 쌓인 신호가 없습니다.")
+        return
+    n = st.slider("최근 거래일 수", 1, max(len(days), 1), min(len(days), 5), key="trial_days") if len(days) > 1 else 1
+    use = sorted(days[:n])
+    rep = forward.report(store, cfg, use)
+    if rep["missing_bars"]:
+        st.warning(f"1분봉이 없어 결과를 못 매긴 신호 {rep['missing_bars']}건")
+        if st.button("신호 종목 1분봉 받고 다시 계산", key="trial_collect", disabled=not has_key):
+            with st.spinner("1분봉 받는 중…"):
+                forward.collect_minutes(Store(paths(cfg)["db"]), cfg, use)
+            st.rerun()
+    rows = []
+    for name in cur:
+        r = rep["conds"].get(name)
+        if r:
+            rows.append(_stat_row(f"{name} — 모든 편입", r["all"]))
+            rows.append(_stat_row(f"{name} — 매수 신호", r["buy"]))
+    if rows:
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+        st.caption(f"{use[0]} ~ {use[-1]} · '모든 편입' = 편입 묶음마다 첫 편입가에 샀다면, '매수 신호' = 운영 설정(가격·추격 한도 등)을 "
+                   "통과했다면. 청산은 조건식 기본 청산 규칙, 비용 차감, 1분봉 근사. 신호별 내역은 🔎 영웅문 조건식 탭.")
+    else:
+        st.info("고른 조건식의 신호가 이 기간에 없습니다.")
+
+
+def tab_lab(cfg: dict, store: Store, examples_only: bool = False) -> None:
+    from ktrade.engine import loader
     found = loader.discover(cfg)
+    if examples_only:
+        found = {k: v for k, v in found.items() if is_example(v)}
     if not found:
         st.info("매매조건이 없습니다 (ktrade new <이름>).")
         return
-    enabled = [e.get("id") for e in cfg["strategies"]["enabled"] if isinstance(e, dict)]
+    if not store.market.has_daily():
+        st.info("백테스트에는 일봉 데이터가 필요합니다 — 몇 종목만 받아도 됩니다 (📥 데이터 탭에서 범위를 넓힐 수 있음).")
+        quick_collect(cfg, "lab_qc")
+        return
+    enabled = [e.get("id") if isinstance(e, dict) else str(e) for e in cfg["strategies"]["enabled"]]
+    if examples_only:
+        lab_experiments(cfg, found, enabled, None)
+        return
+    ai_on = access.can_ai(acc)
+    t1, t2, t3 = st.tabs(["실험", "계획에 쓸 매매조건", "🤖 AI 도우미" + ("" if ai_on else " 🔒")])
+    with t1:
+        lab_experiments(cfg, found, enabled, ai_on)
+    with t2:
+        lab_enabled(cfg, found)
+    with t3:
+        if ai_on:
+            lab_ai_writer(cfg)
+        else:
+            st.info("AI 도우미(백테스트 결과 분석 · 매매조건 작성)는 **AI판 구독** 기능입니다 — 구독 결제는 출시 때 열립니다. "
+                    "지금은 관리자만 씁니다.", icon=":material/lock:")
+
+
+def lab_experiments(cfg: dict, found: dict, enabled: list, ai_on: bool | None) -> None:
+    from ktrade.engine import experiments
     ids = sorted(found, key=lambda s: (s not in enabled, s))
-    sid = st.selectbox("매매조건", ids, format_func=lambda s: f"{s} {found[s].version}" + (" · 켜짐" if s in enabled else ""))
+    sid = st.selectbox("매매조건", ids, key="lab_sid" + ("_ex" if ai_on is None else ""), format_func=lambda s: f"{s} {found[s].version}" + (" · 켜짐" if s in enabled else ""))
     info = found[sid]
     st.caption(f"{info.description or ''}  ·  위치: {info.source}")
     hist = experiments.history(cfg, sid)
@@ -332,6 +428,8 @@ def tab_lab(cfg: dict, store: Store) -> None:
         st.info("아직 실험 기록이 없습니다. 위 버튼으로 백테스트해 보세요.")
         return
     r = hist[-1]
+    if ai_on:
+        lab_ai_analysis(cfg, info, r)
     m = st.columns(5)
     pct = lambda v, f="{:.1f}%": "-" if v is None else f.format(v)  # noqa: E731
     m[0].metric("거래", f"{r.get('trades', 0)}건")
@@ -359,13 +457,208 @@ def tab_lab(cfg: dict, store: Store) -> None:
     st.caption("일봉 근사·생존편향(상장폐지 종목 없음). 과거 확률이며 미래 수익을 보장하지 않습니다.")
 
 
+def hts_names(cfg: dict) -> list[str]:
+    """조건식 이름 후보 — 운영·테스트 조건식, 불러온 목록, 이미 조합에 쓴 이름."""
+    used = [e.get("hts_filter") for e in cfg["strategies"]["enabled"] if isinstance(e, dict) and e.get("hts_filter")]
+    return sorted(set([c["name"] for c in cfg.get("hts_conditions") or []] + list(cfg.get("forward_test") or [])
+                      + (ss.get("ops_listed") or []) + (ss.get("trial_listed") or []) + used))
+
+
+def lab_enabled(cfg: dict, found: dict) -> None:
+    """정식판 — 계획에 쓸 매매조건(config strategies.enabled): 켜기 · 순서(우선순위) · 파라미터 · 영웅문 조건식 조합."""
+    from ktrade.engine import experiments, loader
+    st.markdown("켠 매매조건이 장 마감 후 다음 거래일 계획을 만듭니다 — **순서가 작을수록 우선**(같은 종목을 고르면 위 조건). "
+                "지금 설정(코드·파라미터·청산)으로 **백테스트한 기록이 없으면 계획을 만들지 않습니다**. "
+                "**조건식 조합**을 고르면 계획을 만들 때 그 영웅문 조건식을 조회해 둘 다에 걸린 종목만 남깁니다(백테스트에는 반영 안 됨).")
+    items: dict[str, tuple[int, dict]] = {}
+    for i, e in enumerate(cfg["strategies"]["enabled"]):
+        e = e if isinstance(e, dict) else {"id": str(e)}
+        items[e["id"]] = (i, e)
+    rows = []
+    for sid, info in found.items():
+        i, e = items.get(sid, (None, {}))
+        try:
+            cond = loader.load(info, e.get("params") or {})
+            tested = experiments.has_run(cfg, sid, experiments.setup_hash(info, cond.params, loader.exits_for(cfg, info, e.get("exits") or {})))
+        except Exception:
+            tested = False
+        rows.append({"켜기": i is not None, "순서": (i + 1) if i is not None else None, "매매조건": sid, "버전": info.version,
+                     "백테스트": "✅ 함" if tested else "⚠️ 안 함", "파라미터 (JSON)": json.dumps(e.get("params") or {}, ensure_ascii=False),
+                     "조건식 조합": e.get("hts_filter") or "", "설명": info.description or ""})
+    df = pd.DataFrame(rows).sort_values(["켜기", "순서", "매매조건"], ascending=[False, True, True], na_position="last")
+    if st.button("키움에서 조건식 목록 불러오기 (조합용)", icon=":material/download:", key="lab_list", disabled=not has_key):
+        from ktrade.data.hts import HtsClient
+        try:
+            ss.trial_listed = [c.name for c in HtsClient(cfg).list()]
+            st.rerun()
+        except Exception as exc:
+            st.error(f"목록을 못 받았습니다: {exc}")
+    edited = st.data_editor(df, key="lab_enabled", hide_index=True, width="stretch", disabled=["매매조건", "버전", "백테스트", "설명"],
+                            column_config={
+                                "켜기": st.column_config.CheckboxColumn(width="small"),
+                                "순서": st.column_config.NumberColumn(min_value=1, step=1, width="small"),
+                                "파라미터 (JSON)": st.column_config.TextColumn(help="비우면 {} = 기본값. 예: {\"lookback\": 30}"),
+                                "조건식 조합": st.column_config.SelectboxColumn(options=[""] + hts_names(cfg))})
+    with st.expander("매매조건별 기본 파라미터"):
+        st.json({sid: info.params for sid, info in found.items()}, expanded=False)
+    if not st.button("저장", type="primary", key="lab_enabled_save"):
+        return
+    new, errs = [], []
+    on = edited[edited["켜기"]].copy()
+    on["순서"] = on["순서"].fillna(999)
+    for r in on.sort_values(["순서", "매매조건"]).to_dict("records"):
+        item = {k: v for k, v in items.get(r["매매조건"], (0, {}))[1].items() if k not in ("params", "hts_filter")}
+        item["id"] = r["매매조건"]
+        try:
+            params = json.loads(r["파라미터 (JSON)"] or "{}")
+            if not isinstance(params, dict):
+                raise ValueError("{…} 형태여야 함")
+        except ValueError as exc:
+            errs.append(f"{r['매매조건']}: 파라미터 JSON 오류 — {exc}")
+            continue
+        unknown = set(params) - set(found[r["매매조건"]].params)
+        if unknown:
+            errs.append(f"{r['매매조건']}: 없는 파라미터 {sorted(unknown)}")
+        if params:
+            item["params"] = params
+        if r.get("조건식 조합"):
+            item["hts_filter"] = r["조건식 조합"]
+        new.append(item)
+    if errs:
+        st.error("저장하지 않았습니다\n\n" + "\n".join(f"- {e}" for e in errs))
+        return
+    config_mod.update_sections({"strategies": {**cfg["strategies"], "enabled": new}}, Path(cfg["_home"]) / "config.yaml")
+    st.toast(f"저장했습니다 — 켠 매매조건 {len(new)}개 (다음 장 마감 후 계획부터)")
+    st.rerun()
+
+
+def lab_ai_analysis(cfg: dict, info, r: dict) -> None:
+    """🤖 이 백테스트 결과를 AI가 해석 (AI판·관리자)."""
+    from ktrade import ai
+    with st.expander("🤖 AI 분석 — 이 결과를 해석하고 다음 실험을 제안"):
+        s = ai.settings(cfg)
+        prov = st.radio("AI", list(ai.PROVIDERS), index=list(ai.PROVIDERS).index(s["provider"]), format_func=ai.PROVIDERS.get,
+                        horizontal=True, key=f"ai_an_prov_{info.id}")
+        key = f"ai_an_{info.id}_{r['run_at']}_{prov}"
+        if st.button("분석 요청", key=f"ai_an_go_{info.id}", disabled=not ai.has_key(prov),
+                     help=None if ai.has_key(prov) else "AI 도우미 탭에서 API 키를 먼저 넣으세요"):
+            csv = paths(cfg)["experiments"] / info.id / f"{r['run_at']}_{r['setup']}.csv"
+            trades = pd.read_csv(csv, encoding="utf-8-sig") if csv.exists() else None
+            code_f = Path(str(info.source)) / "strategy.py"
+            code = code_f.read_text(encoding="utf-8") if code_f.exists() else ""
+            try:
+                with st.spinner(f"{ai.PROVIDERS[prov]}에 묻는 중… (1분쯤)"):
+                    ss[key] = ai.ask(cfg, ai.ANALYSIS_SYSTEM, ai.analysis_prompt(info, r, trades, code), prov)
+            except ai.AiError as exc:
+                st.error(str(exc))
+        if ss.get(key):
+            st.markdown(ss[key])
+            st.caption(f"{ai.PROVIDERS[prov]} {s['models'][prov]} — AI 해석은 틀릴 수 있습니다. 투자 조언이 아닙니다.")
+
+
+def lab_ai_writer(cfg: dict) -> None:
+    """🤖 매매조건 작성 도우미 — 요청 양식 → AI → strategy.yaml·strategy.py → 저장·검사 (AI판·관리자)."""
+    from ktrade import ai
+    from ktrade.cli import _docs_src
+    from ktrade.engine import loader
+    s = ai.settings(cfg)
+    with st.expander("AI 연결 설정 — 본인 API 키 (이 PC의 자격 증명 관리자에만 저장)", expanded=not any(map(ai.has_key, ai.PROVIDERS))):
+        prov = st.radio("기본 AI", list(ai.PROVIDERS), index=list(ai.PROVIDERS).index(s["provider"]), format_func=ai.PROVIDERS.get,
+                        horizontal=True, key="ai_set_prov")
+        cols = st.columns(3)
+        models = {p: cols[i].text_input(f"{ai.PROVIDERS[p]} 모델", s["models"][p], key=f"ai_model_{p}") for i, p in enumerate(ai.PROVIDERS)}
+        for p in ai.PROVIDERS:
+            c1, c2, c3 = st.columns([4, 1, 1], vertical_alignment="bottom")
+            have = ai.has_key(p)
+            v = c1.text_input(f"{ai.PROVIDERS[p]} API 키" + (" — 저장됨 " + credentials.mask(credentials.get(ai.KEY_NAME[p])) if have else ""),
+                              type="password", key=f"ai_key_{p}", help=ai.KEY_HELP[p])
+            if c2.button("키 저장", key=f"ai_save_{p}", disabled=not v):
+                credentials.save({ai.KEY_NAME[p]: v})
+                st.rerun()
+            if c3.button("지우기", key=f"ai_del_{p}", disabled=not have):
+                credentials.clear_one(ai.KEY_NAME[p])
+                st.rerun()
+        if st.button("기본 AI·모델 저장", key="ai_set_save"):
+            config_mod.update_sections({"ai": {"provider": prov, "models": models}}, Path(cfg["_home"]) / "config.yaml")
+            st.rerun()
+        st.caption("요금은 각 회사 API 계정으로 나갑니다. 요청은 그 회사로만 직접 가고 ktrade 서버를 거치지 않습니다.")
+    st.markdown("원하는 매매기법을 적으면 AI가 ktrade 규격(`LLM_CONTEXT.md`)대로 **strategy.yaml · strategy.py**를 씁니다. "
+                "받은 코드는 검사한 뒤 저장되고, **실험 탭에서 백테스트**한 다음 '계획에 쓸 매매조건'에서 켭니다.")
+    mine = {k: v for k, v in loader.discover(cfg).items() if not is_example(v)}
+    base_on = st.selectbox("새로 만들기 / 고치기", ["(새 매매조건)"] + sorted(mine), key="ai_w_base")
+    with st.form("ai_writer"):
+        c1, c2, c3 = st.columns([2, 1, 1])
+        sid = c1.text_input("조건 id (영문 소문자·숫자·_)", "" if base_on.startswith("(") else base_on, placeholder="box_breakout")
+        n = c2.number_input("하루 최대 후보", 1, 50, 5)
+        prov_w = c3.selectbox("AI", list(ai.PROVIDERS), index=list(ai.PROVIDERS).index(s["provider"]), format_func=ai.PROVIDERS.get)
+        pick = st.text_area("종목 선정", placeholder="최근 60일 박스권 상단을 종가로 넘고, 거래량이 20일 평균의 1.5~4배, 주가 2천원 이상, 20일 평균 거래대금 5억 이상")
+        excl = st.text_input("제외할 종목", "관리종목, 거래정지")
+        timing = st.text_input("매수 타이밍", placeholder="다음 날 시가가 돌파일 종가 이상이고 15:10 이후에도 그 위면, +5%까지")
+        rank = st.text_input("우선순위", placeholder="거래대금 큰 순")
+        exits = st.text_input("(선택) 이 조건만 쓸 손절·익절", placeholder="손절 박스 하단 -1%, 익절 손절폭의 2배")
+        combo = st.selectbox("(선택) 영웅문 조건식과 조합", [""] + hts_names(cfg),
+                             help="계획을 만들 때 이 조건식에도 걸린 종목만 남깁니다 — 저장할 때 '계획에 쓸 매매조건'의 조건식 조합으로 들어감")
+        go_ = st.form_submit_button("AI에게 작성 요청", type="primary", disabled=not any(map(ai.has_key, ai.PROVIDERS)))
+    if go_:
+        if not re.fullmatch(r"[a-z][a-z0-9_]{1,39}", sid or ""):
+            st.error("조건 id는 영문 소문자로 시작, 소문자·숫자·_ 2~40자")
+            return
+        req = ["위 ktrade 매매조건 규격대로 strategy.yaml, strategy.py 두 파일을 써 줘. 손절·익절 코드는 쓰지 마 (엔진 설정 몫).",
+               f"- 조건 id: {sid}", f"- 종목 선정: {pick}", f"- 제외할 종목: {excl}", f"- 매수 타이밍: {timing}",
+               f"- 하루 최대 후보 수: {n}", f"- 우선순위: {rank}"] + ([f"- 이 조건만 쓸 손절·익절: {exits} → strategy.yaml exits로"] if exits else [])
+        if sid in mine:
+            folder = Path(str(mine[sid].source))
+            for f in ("strategy.yaml", "strategy.py"):
+                if (folder / f).exists():
+                    req += [f"\n지금 {f} (이걸 고쳐서, version을 하나 올려):", (folder / f).read_text(encoding="utf-8")]
+        try:
+            with st.spinner(f"{ai.PROVIDERS[prov_w]}가 작성 중… (1~2분)"):
+                text = ai.ask(cfg, ai.writer_system(_docs_src()), "\n".join(req), prov_w)
+            ss.ai_draft = {"sid": sid, "text": text, "files": ai.parse_files(text), "combo": combo}
+        except ai.AiError as exc:
+            st.error(str(exc))
+    d = ss.get("ai_draft")
+    if not d:
+        return
+    yml, py = d["files"]
+    st.markdown(f"**초안: `{d['sid']}`**")
+    t1, t2, t3 = st.tabs(["strategy.py", "strategy.yaml", "AI 설명"])
+    t1.code(py, language="python")
+    t2.code(yml, language="yaml")
+    t3.markdown(re.sub(r"```.*?```", "", d["text"], flags=re.S))
+    if st.button("저장하고 검사", type="primary", key="ai_w_save"):
+        from ktrade.engine.validate import validate
+        folder = paths(cfg)["strategies"] / d["sid"]
+        backup = {f: (folder / f).read_text(encoding="utf-8") for f in ("strategy.yaml", "strategy.py") if (folder / f).exists()}
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "strategy.yaml").write_text(yml, encoding="utf-8")
+        (folder / "strategy.py").write_text(py, encoding="utf-8")
+        rep = validate(config_mod.load(), d["sid"])
+        if not rep.ok:
+            for f, txt in backup.items():                                # 검사에 떨어지면 원래 파일로
+                (folder / f).write_text(txt, encoding="utf-8")
+            if not backup:
+                for f in ("strategy.yaml", "strategy.py"):
+                    (folder / f).unlink(missing_ok=True)
+            st.error("검사를 통과하지 못해 저장하지 않았습니다 — 아래 결과를 AI에게 보여 주고 다시 요청하세요.")
+            st.code(rep.render(), language=None)
+            return
+        hit = None
+        if d.get("combo"):
+            en = [e if isinstance(e, dict) else {"id": str(e)} for e in cfg["strategies"]["enabled"]]
+            hit = next((e for e in en if e["id"] == d["sid"]), None)
+            if hit:
+                hit["hts_filter"] = d["combo"]
+                config_mod.update_sections({"strategies": {**cfg["strategies"], "enabled": en}}, Path(cfg["_home"]) / "config.yaml")
+        ss.pop("ai_draft", None)
+        st.success(f"`{folder}`에 저장, 검사 통과 — 실험 탭에서 백테스트한 뒤 '계획에 쓸 매매조건'에서 켜세요."
+                   + (f" 조건식 조합 '{d['combo']}'은 켤 때 고르세요." if d.get("combo") and not hit else ""))
+        st.code(rep.render(), language=None)
+
+
 @st.cache_data(ttl=60)
 def plan_docs(folder: str) -> dict[str, list[dict]]:
-    out: dict[str, list[dict]] = {}
-    for f in sorted(pd.io.common.Path(folder).glob("*/*.json"), reverse=True):
-        if not f.name.startswith("_"):
-            out.setdefault(f.parent.name, []).append(json.loads(f.read_text(encoding="utf-8")))
-    return out
+    return report.plan_docs(Path(folder))
 
 
 MA_COLORS = ("#ff7f0e", "#2ca02c", "#9467bd", "#8c564b", "#e377c2", "#17becf")
@@ -404,34 +697,133 @@ def candle(store: Store, symbol: str, n: int = 120, mas: tuple[int, ...] | None 
     return bars_fig(df, "date", mas, vol_mas, "일봉", n)
 
 
-def tab_plan(P: dict, store: Store, cfg: dict | None = None) -> None:
+def schedule_settings(cfg: dict) -> None:
+    """자동 실행 시각·요일 — 저장하면 config.yaml schedule을 바꾸고 작업 스케줄러에 다시 등록한다."""
+    from datetime import time as dtime
+
+    from ktrade.engine import schedule as S
+    s, reg = S.settings(cfg), S.registered()
+    on = {sub: reg.get(name) for name, sub in S.TASKS.items()} if reg is not None else {}
+    head = " · ".join(f"{label} {s[sub] if on.get(sub) else '꺼짐'}" for sub, label in (("daily", "계획"), ("run", "실행"))) \
+        if reg is not None else "crontab"
+    with st.expander(f"⏰ 자동 실행 (장 마감 후 계획 · 장중 실행) — {head}"):
+        st.caption("**장 마감 후 계획**(`ktrade daily`): 시세 받기 → 켠 매매조건으로 다음 거래일 계획. "
+                   "**장중 실행**(`ktrade run`): 그 계획대로 매수하고 엔진 규칙(손절·익절)으로 매도, 장 마감까지 돎. "
+                   "PC가 켜져 있고 로그인돼 있어야 돕니다. 아래 영웅문 조건식 엔진(5단계 시작)과는 따로 돌고, 둘이 겹치면 4단계 우선순위를 따릅니다. "
+                   "계획에 쓸 매매조건은 🧪 백테스트(정식판)에서 켭니다.")
+        if reg is not None:
+            st.caption("작업 스케줄러: " + " · ".join(f"`{n}` {'등록됨' if ok else '없음'}" for n, ok in reg.items()))
+        if msg := ss.pop("schedule_msg", None):
+            (st.success if msg[0] else st.error)(msg[1])
+
+        def hm(v, default):
+            h, m = (v or default).split(":")
+            return dtime(int(h), int(m))
+
+        with st.form("schedule_form"):
+            c1, c2 = st.columns(2)
+            d_on = c1.checkbox("장 마감 후 계획 (daily)", value=bool(s["daily"]))
+            d_at = c1.time_input("시각", hm(s["daily"], "16:30"), step=300, key="sch_daily")
+            r_on = c2.checkbox("장중 실행 (run)", value=bool(s["run"]))
+            r_at = c2.time_input("시각", hm(s["run"], "08:50"), step=300, key="sch_run")
+            days = st.multiselect("요일", list(S.DAYS), default=s["days"], format_func=S.DAY_KO.get)
+            st.caption("권장: 계획은 장 마감(15:30) 뒤 일봉이 확정된 16:00 이후, 실행은 장 시작(09:00) 전.")
+            b1, b2 = st.columns(2)
+            save = b1.form_submit_button("저장하고 등록", type="primary")
+            off = b2.form_submit_button("자동 실행 모두 끄기")
+        if save or off:
+            new = {"daily": d_at.strftime("%H:%M") if d_on and not off else None,
+                   "run": r_at.strftime("%H:%M") if r_on and not off else None, "days": days}
+            errs = S.check(new)
+            if errs:
+                st.error(" / ".join(errs))
+                return
+            try:
+                config_mod.update_sections({"schedule": new}, Path(cfg["_home"]) / "config.yaml")
+                out = S.install(cfg={**cfg, "schedule": new})
+                ss["schedule_msg"] = (True, out)
+            except Exception as e:                                       # 작업 스케줄러 거부 등 — 화면에 그대로
+                ss["schedule_msg"] = (False, f"등록 실패: {e}")
+            st.rerun()
+        if reg is None:
+            st.code("\n".join(S.cron_lines(cfg)) or "(등록할 작업 없음)", language="bash")
+
+
+def tab_plan(P: dict, store: Store, cfg: dict) -> None:
+    """장 마감 후 계획 — 그날 계획마다 실제 결과·이유와 '계획대로였다면'(일봉 근사), 걸러진 계획, 최근 N일 적중, 장중 조건식 매매."""
+    from ktrade.engine.risk import PRIORITY_MODES
     docs = plan_docs(str(P["plans"]))
+    pr = cfg.get("priority") or {}
+    st.caption(f"우선순위: **{PRIORITY_MODES.get(pr.get('mode', 'plan'))}**"
+               + (f" (계획 몫 {pr.get('plan_reserve', 0)}자리)" if pr.get("mode", "plan") == "plan" else "")
+               + " — 운영 탭 4단계에서 바꿈. 계획 파일은 지우지 않고 날짜별로 계속 쌓입니다.")
     if not docs:
-        st.info("계획이 없습니다. 켠 매매조건이 장 마감 후 다음 날 계획을 만듭니다 (`ktrade plan` 또는 `ktrade daily`).")
+        st.info("계획이 없습니다. 백테스트(정식판)에서 켠 매매조건이 장 마감 후 다음 거래일 계획을 만듭니다 "
+                "(운영 탭 ⏰ 자동 실행, 또는 `ktrade daily`). 일봉 데이터가 있어야 합니다.")
+    else:
+        cost = float(cfg["backtest"]["cost_pct"])
+        t1, t2, t3 = st.tabs(["날짜별 계획", "최근 적중", "걸러진 계획"])
+        with t1:
+            asof = st.selectbox("기준일 (이날 장 마감 기준 → 다음 거래일에 실행)", list(docs), key="plan_asof")
+            day = report.exec_day(store, asof)
+            t = report.plan_review(store, docs[asof], asof, cost)
+            if t.empty:
+                st.info(f"{asof}: 조건에 맞는 종목이 없어 계획이 0건입니다 — 이유는 '걸러진 계획' 탭.")
+            else:
+                n = t["결과"].value_counts()
+                c = st.columns(4)
+                c[0].metric("계획", len(t), help=f"실행일 {day}")
+                c[1].metric("매수함", int(n.get("매수함", 0)))
+                c[2].metric("안 삼 · 못 삼", int(n.get("안 삼", 0) + n.get("못 삼", 0)))
+                c[3].metric("조건 도달 (계획대로였다면)", int(t["계획대로였다면"].str.startswith("도달").sum()))
+                st.dataframe(t, hide_index=True, width="stretch", column_config={
+                    "이유": st.column_config.TextColumn(width="large"), "가상 수익%": st.column_config.NumberColumn(format="%.2f")})
+                st.caption(f"실행일 {day}. **결과·이유** = 실제 실행(ktrade run) 기록, **계획대로였다면** = 일봉으로 따라가 본 근사"
+                           f"(비용 {cost}% 반영, 실제 체결과 다를 수 있음).")
+                pick = st.selectbox("종목 차트", [f"{r['종목']} ({r['코드']})" for r in t.to_dict("records")], key="plan_chart")
+                r = t.iloc[[f"{x['종목']} ({x['코드']})" for x in t.to_dict("records")].index(pick)]
+                if store.market.has_daily():
+                    fig = candle(store, r["코드"], cfg=cfg)
+                    for y, name, color in ((r["손절"], "손절", DOWN), (r["목표"], "목표", UP)):
+                        if y is not None and y == y:
+                            fig.add_hline(y=y, line_dash="dot", line_color=color, annotation_text=f"{name} {y:,.0f}", row=1, col=1)
+                    st.plotly_chart(fig, width="stretch")
+        with t2:
+            n_days = st.slider("최근 기준일 수", 5, 120, 20, 5, key="plan_days")
+            summ = report.plan_summary(store, docs, n_days, cost)
+            if summ.empty:
+                st.info("계획이 아직 없습니다.")
+            else:
+                st.dataframe(summ, hide_index=True, width="stretch")
+                st.caption("조건 도달률 = 계획의 매수 조건에 실제로 닿은 비율. 가상 승률·평균 = 닿았다면 엔진 청산 규칙대로 팔았을 때(일봉 근사). "
+                           "건수가 적으면 우연일 수 있습니다. 투자 조언이 아닙니다.")
+        with t3:
+            asof3 = st.selectbox("기준일", list(docs), key="plan_rej_asof")
+            rj = report.rejected(P["plans"], asof3)
+            if rj.get("skipped"):
+                st.warning("**건너뛴 매매조건**\n\n" + "\n".join(f"- `{k}`: {v}" for k, v in rj["skipped"].items()))
+            if rj.get("errors"):
+                st.error("**오류 난 매매조건**\n\n" + "\n".join(f"- `{k}`: {str(v).splitlines()[-1][:200]}" for k, v in rj["errors"].items()))
+            if rj.get("rejected"):
+                st.dataframe(pd.DataFrame(rj["rejected"]).rename(columns={"strategy": "매매조건", "symbol": "종목", "reason": "걸러진 이유"}),
+                             hide_index=True, width="stretch")
+            if not any(rj.get(k) for k in ("skipped", "errors", "rejected")):
+                st.caption("이날 걸러진 계획이 없습니다.")
+    st.subheader("장중 조건식 매매", divider="gray")
+    hts = store.query("SELECT substr(buy_submitted_at, 1, 10) AS day, strategy, name, symbol, status, entry_price, exit_price, "
+                      "exit_reason, note, plan FROM plan_trades WHERE strategy LIKE 'hts:%' ORDER BY id DESC LIMIT 2000")
+    if hts.empty:
+        st.caption("영웅문 조건식(매매 모드)이 장중에 산 기록이 없습니다. 조건식이 건너뛴 이유는 🔎 영웅문 조건식 탭 신호 일지에 있습니다.")
         return
-    asof = st.selectbox("기준일 (이날 장 마감 기준 → 다음 거래일에 실행)", list(docs))
-    trades = store.plan_trades(5000)
-    rows = []
-    for doc in docs[asof]:
-        for p in doc["plans"]:
-            t = trades[trades["plan_id"] == p["plan_id"]] if not trades.empty else trades
-            status = t.iloc[0]["status"] if t is not None and not t.empty else "-"
-            e = p["entry"]
-            rows.append({"매매조건": f"{doc['strategy']} {doc['version']}", "순위": p.get("rank"), "종목": p.get("name"),
-                         "코드": p["symbol"], "매수 조건": f"시가≥{e['min_open']:,.0f} · {e['after']} 이후 "
-                         f"{e['min_price']:,.0f}~{e['max_price']:,.0f}", "손절": p["stop"], "목표": p["target"],
-                         "실행": status, "사유": p.get("basis", "")})
-    if not rows:
-        st.info(f"{asof}: 조건에 맞는 종목이 없어 계획이 0건입니다.")
-        return
-    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
-    pick = st.selectbox("종목 차트", [f"{r['종목']} ({r['코드']})" for r in rows])
-    r = rows[[f"{x['종목']} ({x['코드']})" for x in rows].index(pick)]
-    fig = candle(store, r["코드"], cfg=cfg)
-    for y, name, color in ((r["손절"], "손절", DOWN), (r["목표"], "목표", UP)):
-        if y is not None:
-            fig.add_hline(y=y, line_dash="dot", line_color=color, annotation_text=f"{name} {y:,.0f}", row=1, col=1)
-    st.plotly_chart(fig, width="stretch")
+    d = st.selectbox("날짜", sorted(hts["day"].dropna().unique(), reverse=True), key="plan_hts_day")
+    h = hts[hts["day"] == d].copy()
+    h["조건식"] = h["strategy"].str[4:]
+    h["결과"] = h["status"].map(lambda v: report.STATUS_KO.get(v, v))
+    h["수익률%"] = ((h["exit_price"] / h["entry_price"] - 1) * 100).round(2)
+    h["편입 근거"] = h["plan"].map(lambda v: (json.loads(v) if isinstance(v, str) and v else {}).get("basis", ""))
+    st.dataframe(h[["조건식", "symbol", "결과", "entry_price", "exit_price", "exit_reason", "수익률%", "편입 근거"]]
+                 .rename(columns={"symbol": "종목", "entry_price": "매수가", "exit_price": "매도가", "exit_reason": "매도 이유"}),
+                 hide_index=True, width="stretch")
 
 
 def tab_trades(store: Store) -> None:
@@ -866,6 +1258,21 @@ def ops_settings(cfg: dict) -> None:
             w0 = a.text_input("신규 매수 시작", win[0] or "", placeholder="09:00", help="비우면 조건식별 매수 시간대만")
             w1 = b.text_input("신규 매수 끝", win[1] or "", placeholder="14:30")
             flat = c.text_input("시간 일괄청산", r0.get("flatten_at") or "", placeholder="15:15", help="비우면 끔")
+            from ktrade.engine.risk import PRIORITY_MODES
+            p0 = {**config_mod.DEFAULTS["priority"], **(cfg.get("priority") or {})}
+            sp0 = {**config_mod.DEFAULTS["priority"]["split"], **(p0.get("split") or {})}
+            st.markdown("**우선순위** — 장 마감 후 계획(ktrade run)과 조건식이 같은 계좌를 쓸 때")
+            a, b = st.columns([2, 1])
+            pmode = a.radio("우선순위", list(PRIORITY_MODES), index=list(PRIORITY_MODES).index(p0.get("mode", "plan")),
+                            format_func=PRIORITY_MODES.get, horizontal=True, label_visibility="collapsed",
+                            help="계획 우선: 오늘 계획 종목은 조건식이 사지 않고, 계획 몫 자리를 남겨 둠")
+            reserve = b.number_input("계획 몫 (자리)", 0, 50, int(p0.get("plan_reserve") or 0), 1,
+                                     help="계획 우선일 때 동시 보유·하루 매수 한도에서 계획에 남겨 둘 수 (오늘 계획 수까지만)")
+            a, b, c, d = st.columns(4)
+            sp_pp = a.number_input("나눠 쓰기: 계획 보유", 0, 50, int(sp0["plan"].get("positions") or 0), 1)
+            sp_po = b.number_input("계획 하루 매수", 0, 200, int(sp0["plan"].get("orders") or 0), 1)
+            sp_hp = c.number_input("조건식 보유", 0, 50, int(sp0["hts"].get("positions") or 0), 1)
+            sp_ho = d.number_input("조건식 하루 매수", 0, 200, int(sp0["hts"].get("orders") or 0), 1)
         saved = st.form_submit_button("설정 저장", icon=":material/save:", type="primary", width="stretch")
     if saved:
         try:
@@ -875,7 +1282,9 @@ def ops_settings(cfg: dict) -> None:
                     "daily_profit_target": profit or None, "daily_loss_limit": loss or None, "order_timeout_sec": timeout or None,
                     "buy_window": [w0.strip(), w1.strip()] if w0.strip() and w1.strip() else None,
                     "flatten_at": flat.strip() or None}
-            errs = ops.save_settings(cfg, conds, risk)
+            prio = {"mode": pmode, "plan_reserve": int(reserve),
+                    "split": {"plan": {"positions": int(sp_pp), "orders": int(sp_po)}, "hts": {"positions": int(sp_hp), "orders": int(sp_ho)}}}
+            errs = ops.save_settings(cfg, conds, risk, prio)
         except (ValueError, KeyError) as exc:
             errs = [str(exc)]
         if errs:
@@ -966,6 +1375,7 @@ def ops_live(cfg: dict) -> None:
 
 
 def tab_ops(cfg: dict) -> None:
+    schedule_settings(cfg)
     ops_status(cfg)
     left, right = st.columns(2, gap="large")
     with left:
@@ -977,17 +1387,18 @@ def tab_ops(cfg: dict) -> None:
                "실전 계좌는 5단계에서 동의해야 주문하며, 수익을 보장하지 않습니다.")
 
 
-def tab_help(demo_mode: bool) -> None:
+def tab_help() -> None:
     st.markdown(f"""
 **ktrade로 하는 일** — 매매조건(종목 선정 + 매수 타이밍)은 내가, 손절·익절·실행·백테스트는 엔진이 합니다.
 
-1. **데이터 받기** — {'키움 로그인 후 대시보드에서 몇 종목, 또는 명령창에서 `ktrade collect`' if demo_mode else '명령창에서 `ktrade collect` (범위는 `~/.ktrade/config.yaml`의 collect)'}
+0. **자동매매만 쓴다면** — 키움 로그인 → 🕹️ 운영 탭에서 조건식·손절·익절·한도를 정하고 시작. 차트 데이터는 필요 없습니다.
+1. **데이터 받기 (백테스트·계획용, 선택)** — 📥 데이터 탭에서 몇 종목 또는 받을 범위, 또는 명령창 `ktrade collect`
 2. **매매조건 만들기** — `ktrade new 내조건` → `~/.ktrade/strategies/내조건/strategy.py` 작성.
    직접 쓰기 어렵다면 `~/.ktrade/docs/LLM_CONTEXT.md`를 Claude·Gemini에 붙여 넣고 원하는 매매기법을 설명하면 코드를 써 줍니다.
-3. **실험** — `ktrade test 내조건` 또는 이 화면의 **백테스트** 탭 (이용 코드 로그인 필요, 체험 모드는 가상 데이터로). 바꿀 때마다 기록이 쌓여 비교됩니다.
-4. **켜기** — 마음에 들면 `config.yaml`의 `strategies.enabled`에 추가 → 장 마감 후 다음 날 계획이 생깁니다 (**계획** 탭).
+3. **실험** — 🧪 백테스트 탭. **체험판**: 예제 매매조건을 내 데이터로 · 영웅문 조건식은 실제 신호를 쌓아 평가. **정식판**(이용 코드): 내 매매조건, `ktrade test 내조건`. 바꿀 때마다 기록이 쌓여 비교됩니다.
+4. **켜기** — 정식판 백테스트 탭 '계획에 쓸 매매조건'에서 켬 → 장 마감 후 다음 날 계획이 생깁니다 (**계획** 탭).
 5. **모의 운영** — `ktrade run`: 기본은 가상 체결(paper). 키움 모의투자는 `broker: kiwoom`, `is_mock: true`.
-6. **자동 실행** — `ktrade schedule install` (평일 장 마감 후 계획, 장중 실행).
+6. **자동 실행** — 🕹️ 운영 탭 맨 위 ⏰ 자동 실행에서 시각·요일을 정해 등록 (또는 `ktrade schedule install`, 기본 평일 16:30 계획 · 08:50 실행).
 
 바탕화면의 **ktrade 명령창**에서 명령을 쓰고, 이 대시보드로 결과를 봅니다. 전체 명령: `ktrade --help`
 """)
@@ -1025,29 +1436,21 @@ def tab_admin() -> None:
                                                               "iat": "발급일", "note": "메모"}), hide_index=True, width="stretch")
 
 
-def main_view(cfg: dict, demo_mode: bool) -> None:
+def main_view(cfg: dict) -> None:
+    """키움 로그인(또는 받아 둔 DB)만 있으면 모든 기본 기능 — 차트 데이터는 백테스트·계획용으로 고를 때만."""
     P = paths(cfg)
     if not P["db"].exists():
-        st.warning("DB가 없습니다. 먼저 시세를 받으세요.")
-        return
+        Store(P["db"])                                                   # 빈 DB (매매 기록·조건식 신호용)
     store = Store(P["db"], readonly=True)
-    st.title("📈 ktrade" + (" · 체험 모드" if demo_mode else ""))
-    if demo_mode:
-        st.info("🧪 **체험 모드** — 백테스트만 써 볼 수 있습니다. 가상 종목(DEMO01…)·가상 시세라 숫자에 의미가 없습니다. "
-                "키움 로그인 후 자동매매(기본 기능)를, 이용 코드로 추가 로그인하면 내 데이터로 백테스트를 씁니다.")
-        tabs = st.tabs(["🧪 백테스트 (체험)", "❓ 사용법"])
-        with tabs[0]:
-            tab_lab(cfg, store)
-        with tabs[1]:
-            tab_help(True)
-        return
+    st.title("📈 ktrade")
     hb = store.get_setting("live.heartbeat", {}) or {}
     c1, c2, c3 = st.columns(3)
     c1.metric("매매 모드", f"{cfg['broker']} · {'모의' if cfg['kiwoom'].get('is_mock', True) else '실전'}")
     c2.metric("마지막 점검 (ktrade run)", hb.get("ts", "기록 없음"))
-    c3.metric("마지막 일봉", store.last_index_date_before("9999-12-31") or "-")
+    c3.metric("마지막 일봉", store.last_index_date_before("9999-12-31") or "받지 않음 (선택)")
+    full = access.can_backtest(acc)
     names = ["🕹️ 운영", "🗓️ 계획", "💹 매매 기록", "📊 성적", "🔎 영웅문 조건식", "📈 종목 차트", "📥 데이터",
-             "🧪 백테스트" + ("" if access.can_backtest(acc) else " 🔒"), "❓ 사용법"] + (["🛠️ 관리자"] if access.is_admin(acc) else [])
+             "🧪 백테스트 " + ("정식판" if full else "체험판"), "❓ 사용법"] + (["🛠️ 관리자"] if access.is_admin(acc) else [])
     tabs = st.tabs(names)
     with tabs[0]:
         tab_ops(cfg)
@@ -1064,12 +1467,12 @@ def main_view(cfg: dict, demo_mode: bool) -> None:
     with tabs[6]:
         tab_data(cfg, store)
     with tabs[7]:
-        if access.can_backtest(acc):
+        if full:
             tab_lab(cfg, store)
         else:
-            tab_lab_locked()
+            tab_trial(cfg, store)
     with tabs[8]:
-        tab_help(demo_mode)
+        tab_help()
     if access.is_admin(acc):
         with tabs[9]:
             tab_admin()
@@ -1094,11 +1497,7 @@ if ss.page == "login":
     page_login()
 elif ss.page == "access":
     page_access()
-elif ss.mode == "demo":
-    main_view(ensure_demo(), True)
-elif has_data(base):
-    main_view(base, False)
-elif has_key:
-    page_collect()
+elif has_key or has_data(base):
+    main_view(base)
 else:
     page_welcome()

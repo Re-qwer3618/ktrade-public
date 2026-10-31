@@ -1,6 +1,6 @@
 [project]
 name = "ktrade"
-version = "0.7.0"
+version = "0.8.0"
 description = "나만의 매매조건을 실험하는 국내주식 엔진 — 키움 REST API 기반, 백테스트·모의투자 (키움증권과 무관한 개인 프로젝트)"
 readme = "README.md"
 license = "MIT"
@@ -21,8 +21,8 @@ Homepage = "https://github.com/Re-qwer3618/ktrade-public"
 Issues = "https://github.com/Re-qwer3618/ktrade-public/issues"
 
 [project.optional-dependencies]
-dashboard = ["streamlit>=1.40", "plotly>=5"]
-dev = ["pytest>=8", "streamlit>=1.40", "plotly>=5"]
+dashboard = ["streamlit>=1.40", "plotly>=5", "anthropic>=1.0"]
+dev = ["pytest>=8", "streamlit>=1.40", "plotly>=5", "anthropic>=1.0"]
 
 [project.scripts]
 ktrade = "ktrade.cli:main"

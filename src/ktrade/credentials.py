@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 
 NAMES = ("KIWOOM_APP_KEY", "KIWOOM_APP_SECRET")
+AI_NAMES = ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY")   # AI 기능용 본인 API 키 (같은 저장소, 키움 로그아웃과 따로)
 
 
 def _home() -> Path:
@@ -71,7 +72,7 @@ def load_all() -> dict[str, str]:
 
 def save(values: dict[str, str]) -> str:
     """values = {KIWOOM_APP_KEY: ..., KIWOOM_APP_SECRET: ...}. 저장한 곳을 돌려준다."""
-    values = {k: str(v).strip() for k, v in values.items() if k in NAMES}
+    values = {k: str(v).strip() for k, v in values.items() if k in NAMES + AI_NAMES}
     kr = _keyring()
     if kr:
         try:
@@ -105,6 +106,19 @@ def clear() -> None:
             f.write_text(json.dumps(rest, indent=1), encoding="utf-8")
         else:
             f.unlink()
+
+
+def clear_one(name: str) -> None:
+    """키 하나만 지우기 (AI 키용 — 키움 키는 clear)."""
+    kr = _keyring()
+    if kr:
+        try:
+            kr.delete_password(_service(), name)
+        except Exception:
+            pass
+    f = _file()
+    if f.exists() and name in _read_file():
+        f.write_text(json.dumps({k: v for k, v in _read_file().items() if k != name}, indent=1), encoding="utf-8")
 
 
 def mask(v: str) -> str:
