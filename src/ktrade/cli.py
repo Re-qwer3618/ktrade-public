@@ -1,6 +1,6 @@
 """ktrade 명령 — 매매조건 실험 엔진.
 
-  매매조건 만들기·실험 (조건을 바꾸거나 더할 때마다)
+  매매조건 만들기·실험 (조건을 바꾸거나 더할 때마다) — test·backtest·experiments·compare는 이용 코드 로그인 필요(ktrade access login)
     ktrade new <id>                  내 매매조건 뼈대 (~/.ktrade/strategies/<id>) — 종목 선정 + 매수 타이밍만 작성
     ktrade test <id>                 검사 + 백테스트 + 이전 실험과 비교 (한 번에)
     ktrade validate <id> [--asof]    검사만 (형식·금지 사항·실행 결과·엔진 검사)
@@ -13,20 +13,26 @@
 
   데이터 (키움에서 받을 범위는 config.yaml collect, 옵션은 그 실행에서만 덮어씀)
     ktrade collect [--symbols 005930,000660 | --symbols-file 파일] [--markets 거래소,코스닥] [--start --end | --years]
-                   [--minute-symbols …] [--limit N] [--dry-run]
-    ktrade data [--symbols … | --all]   DB에 받아 둔 범위 (종목 수·기간·분봉)
+                   [--exclude-kinds ETF,우선주 | --keep-all-kinds] [--price-min --price-max] [--cap-min --cap-max(억)]
+                   [--no-daily] [--minute-symbols …|all --minute-intervals 1,5] [--tick-symbols …|all --tick-units 1,10]
+                   [--limit N] [--dry-run]
+    ktrade data [--symbols … | --all]   받아 둔 범위 (종목 수·기간·분봉·틱) + 종류별 용량
+    ktrade data-dir [새 폴더] [--no-move]   데이터 폴더 보기·바꾸기 (기존 데이터도 옮김)
     ktrade import-db <경로>             다른 SQLite DB에서 가져오기
 
   영웅문 조건검색식 (영웅문4 '조건검색 0150'에서 만든 조건식 — 키움 서버가 계산, 주문 없음)
     ktrade hts list                    조건식 목록 (번호·이름)
     ktrade hts scan "<이름|번호>" [--csv 파일] [--limit N]   지금 그 조건식에 걸린 종목
     ktrade hts watch ["<이름>" …] [--until HH:MM]   장중 실시간 편입·이탈 → 신호 일지. config에서 mode: trade인 조건식은 매매
-                                       (paper·키움 모의만 — 실전은 아직 막힘), 손절·익절·당일 청산은 엔진 규칙
+                                       (실전은 kiwoom.real_orders: true 동의 뒤), 손절·익절·당일 청산은 엔진 규칙
     ktrade hts signals [--date YYYY-MM-DD] [--cond 이름]   신호 일지 요약
     ktrade hts report [--date | --days N] [--cond 이름] [--collect]   성적표: 신호마다 '그때 샀다면'(1분봉, 엔진 청산) + 실제 매매
 
   운영
     ktrade login [--real] | logout     키움 앱키 입력·삭제 (대시보드 로그인 화면과 같음, OS 자격 증명 저장소에 보관)
+    ktrade real-orders on|off|show     실전 계좌 주문 동의 (조건식 매매가 실전 키로 주문하려면 on)
+    ktrade access login|logout|status  백테스트 이용 코드 로그인 (관리자에게 받은 아이디·코드)
+    ktrade admin init|issue <아이디> [--role backtest|admin] [--days N]|list   관리자: 이용 코드 발급
     ktrade init | daily | plan [--asof] | run [--once] [--live-confirm]
     ktrade status | report | doctor [--offline] | schedule install|remove|show [--dry-run]
     ktrade dashboard [--open]        보기 전용 대시보드 (이 PC에서만)
@@ -118,6 +124,13 @@ def _cfg() -> dict:
     return config_mod.load()
 
 
+def _require_backtest() -> None:
+    from ktrade import access
+    if not access.can_backtest(access.current()):
+        sys.exit("백테스트는 이용 코드 로그인이 필요합니다 — ktrade access login (코드는 관리자에게 받습니다)\n"
+                 "가상 데이터로 먼저 보려면: ktrade dashboard --open → 체험 모드")
+
+
 def _docs_src() -> Path | None:
     here = Path(__file__).resolve()
     for cand in (here.parents[2] / "docs", here.parent / "_docs"):  # 소스 체크아웃 / 설치본
@@ -186,8 +199,69 @@ def cmd_login(a) -> None:
             sys.exit(f"연결 실패: {str(exc)[:300]}\n키 종류(모의는 기본, 실전은 --real)와 키를 확인하세요. 확인 없이 저장: --no-check")
         print(f"연결 성공 — 삼성전자 현재가 {price:,.0f}원 (조회만)" if price else "연결 성공")
     where = credentials.save({"KIWOOM_APP_KEY": key, "KIWOOM_APP_SECRET": secret})
-    config_mod.set_is_mock(mock)
-    print(f"저장했습니다 ({where}) · kiwoom.is_mock: {str(mock).lower()}")
+    config_mod.set_kiwoom(is_mock=mock, real_orders=False)
+    print(f"저장했습니다 ({where}) · kiwoom.is_mock: {str(mock).lower()}"
+          + ("\n실전 키입니다. 실전 주문은 동의 전까지 나가지 않습니다 (ktrade real-orders on)" if not mock else ""))
+
+
+def cmd_real_orders(a) -> None:
+    cfg = _cfg()
+    if a.action != "show":
+        on = a.action == "on"
+        if on and not a.yes:
+            print("실전 계좌 주문에 동의합니다: 조건식 매매(mode: trade)가 실전 계좌로 실제 돈을 주문합니다.\n"
+                  "손실은 본인 책임이며 ktrade는 수익을 보장하지 않습니다.")
+            if input("동의하면 '동의'를 입력: ").strip() != "동의":
+                sys.exit("취소했습니다.")
+        config_mod.set_kiwoom(real_orders=on)
+        cfg = _cfg()
+    allow, how = _hts_trade_allowed(cfg)
+    print(f"kiwoom.real_orders: {str(bool(cfg['kiwoom'].get('real_orders'))).lower()} · 조건식 매매 주문: "
+          + (how if allow else f"안 함 — {how}"))
+
+
+def cmd_access(a) -> None:
+    import getpass
+
+    from ktrade import access
+    if a.action == "login":
+        user_id = (a.id or input("아이디: ")).strip()
+        code = (a.code or getpass.getpass("이용 코드 (화면에 보이지 않음): ")).strip()
+        try:
+            info = access.login(user_id, code)
+        except ValueError as exc:
+            sys.exit(f"로그인 실패: {exc}")
+        print(f"로그인했습니다 — {access.describe(info)}")
+    elif a.action == "logout":
+        access.logout()
+        print("이용 코드 로그인을 지웠습니다.")
+    else:
+        print(f"백테스트 이용 권한: {access.describe(access.current())}")
+
+
+def cmd_admin(a) -> None:
+    from ktrade import access
+    if a.action == "init":
+        pub, new = access.admin_init()
+        print(("관리자 서명 키를 만들었습니다" if new else "관리자 서명 키가 이미 있습니다")
+              + f": {access._admin_dir() / 'signing_key'}  (백업해 두고 git·배포에 넣지 마세요)")
+        print(f"공개 키: {pub}")
+        if not access.key_registered(access.signing_seed()):
+            print("! 이 공개 키가 ktrade/access.py PUBLIC_KEYS에 없습니다 — 넣고 새 버전을 배포해야 이 키로 발급한 코드가 통합니다.")
+    elif a.action == "issue":
+        if not a.id:
+            sys.exit("아이디를 주세요 — ktrade admin issue <아이디> [--role backtest|admin] [--days N]")
+        try:
+            code = access.admin_issue(a.id, a.role, a.days or None, a.note or "")
+        except ValueError as exc:
+            sys.exit(str(exc))
+        print(f"아이디: {a.id}\n역할: {a.role}\n이용 코드: {code}\n받는 사람: ktrade access login (또는 대시보드 → 백테스트 로그인)")
+    else:
+        rows = access.issued()
+        if not rows:
+            print("발급 기록이 없습니다.")
+        for r in rows:
+            print(f"{r['at']}  {r['id']:<20} {r['role']:<9} 만료 {r.get('exp') or '없음'}  {r.get('note') or ''}")
 
 
 def cmd_logout(a) -> None:
@@ -333,6 +407,7 @@ def _print_result(res: dict) -> None:
 
 
 def cmd_backtest(a) -> None:
+    _require_backtest()
     cfg = _cfg()
     res, prev, path = _run_backtest(cfg, a.id, a.start, a.end, _json(a.params), _json(a.exits), a.note or "",
                                     a.symbols, a.symbols_file)
@@ -345,6 +420,7 @@ def cmd_backtest(a) -> None:
 def cmd_test(a) -> None:
     from ktrade.engine import experiments
     from ktrade.engine.validate import validate
+    _require_backtest()
     cfg = _cfg()
     rep = validate(cfg, a.id, None, _json(a.params))
     print(rep.render().replace("다음: ktrade test <조건>  (검사 + 백테스트 + 이전 실험과 비교)", ""))
@@ -361,6 +437,7 @@ def cmd_test(a) -> None:
 def cmd_experiments(a) -> None:
     import pandas as pd
     from ktrade.engine import experiments
+    _require_backtest()
     rows = experiments.history(_cfg(), a.id)
     if not rows:
         sys.exit(f"'{a.id}' 실험 기록이 없습니다 (ktrade test {a.id})")
@@ -371,6 +448,7 @@ def cmd_experiments(a) -> None:
 def cmd_compare(a) -> None:
     import pandas as pd
     from ktrade.engine import experiments
+    _require_backtest()
     cfg = _cfg()
     rows = []
     for sid in a.ids:
@@ -405,10 +483,16 @@ def cmd_collect(a) -> None:
     from ktrade.data.collect import collect, resolve_scope, target_symbols
     from ktrade.data.store import Store
     cfg = _cfg()
+    def rng(lo, hi):
+        return None if lo is None and hi is None else {"min": lo, "max": hi}
+    kinds = [] if a.keep_all_kinds else _split(a.exclude_kinds)
     try:
         scope = resolve_scope(cfg, symbols=_split(a.symbols), symbols_file=a.symbols_file, markets=_split(a.markets),
                               start=a.start, end=a.end, years=a.years, limit=a.limit,
-                              minute_symbols=_split(a.minute_symbols), minute_start=a.minute_start)
+                              minute_symbols=a.minute_symbols, minute_start=a.minute_start,
+                              exclude_kinds=kinds, price=rng(a.price_min, a.price_max), market_cap=rng(a.cap_min, a.cap_max),
+                              daily=False if a.no_daily else None, minute_intervals=a.minute_intervals,
+                              tick_symbols=a.tick_symbols, tick_units=a.tick_units, tick_start=a.tick_start)
     except (ValueError, FileNotFoundError) as exc:
         sys.exit(str(exc))
     store = Store(paths(cfg)["db"])
@@ -422,6 +506,24 @@ def cmd_collect(a) -> None:
         print("  --dry-run: 아무것도 받지 않았습니다.")
         return
     print(json.dumps(collect(store, cfg, scope), ensure_ascii=False))
+
+
+def cmd_data_dir(a) -> None:
+    import shutil
+    cfg = _cfg()
+    cur = paths(cfg)["data"]
+    if not a.path:
+        free = shutil.disk_usage(cur if cur.exists() else cur.anchor).free / 2**30
+        print(f"데이터 폴더: {cur}" + ("" if cfg.get("data_dir") else "  (기본값 — 사용자 폴더 안)"))
+        print(f"  남은 공간 {free:,.1f} GB · 바꾸려면: ktrade data-dir <새 폴더>  (기존 데이터도 옮김, --no-move면 옮기지 않음)")
+        return
+    try:
+        dst, moved = config_mod.set_data_dir(cfg, a.path, move=not a.no_move)
+    except (ValueError, RuntimeError, OSError) as exc:
+        sys.exit(f"바꾸지 못했습니다: {exc}")
+    print(f"데이터 폴더: {cur} → {dst}")
+    print(f"  옮긴 것: {', '.join(moved)}" if moved else "  옮긴 것 없음")
+    print("  ktrade run·hts watch·대시보드를 켜 둔 상태였다면 다시 시작하세요.")
 
 
 def cmd_data(a) -> None:
@@ -441,12 +543,17 @@ def cmd_data(a) -> None:
         print(t.to_string(index=False) if not t.empty else "그 종목들의 일봉이 DB에 없습니다")
         return
     s = store.summary()
-    d, m = s["daily"], s["minute"]
-    print(f"DB: {p}")
+    d = s["daily"]
+    print(f"시세: {store.market.root}  (종목 목록·매매 기록: {p})")
     print(f"일봉: {d['symbols']}종목 · {d['rows']:,}행" + (f" · {d['from']} ~ {d['to']}" if d["rows"] else ""))
     for code, v in s["index"].items():
         print(f"지수 {({'001': '코스피', '101': '코스닥'}).get(code, code)}: {v['rows']}일 · {v['from']} ~ {v['to']}")
-    print(f"분봉: {m['symbols']}종목 · {m['rows']:,}행" + (f" · {m['from']} ~ {m['to']}" if m["rows"] else ""))
+    for iv, m in s["minute"].items():
+        print(f"{iv}분봉: {m['symbols']}종목 · {m['rows']:,}행" + (f" · {m['from']} ~ {m['to']}" if m["rows"] else ""))
+    for t, n in s["tick"].items():
+        print(f"{t}틱: {n}일치 파일")
+    if s["disk"]:
+        print("용량: " + ", ".join(f"{k} {v['mb']:,} MB ({v['files']}개 파일)" for k, v in s["disk"].items()))
     if s["universe"]:
         print("종목 목록: " + ", ".join(f"{k or '(빈 값)'} {v}" for k, v in s["universe"].items()))
     if a.all:
@@ -508,12 +615,15 @@ _ACTION_KO = {"INIT": "등록 시 편입", "WAIT": "확인 대기", "WOULD_BUY":
 
 
 def _hts_trade_allowed(cfg: dict) -> tuple[bool, str]:
-    """조건식 매매를 실제로 주문해도 되는지 — paper(가상 체결)·키움 모의투자만. 실전은 성적 기준(다음 단계) 전까지 막는다."""
+    """조건식 매매를 실제로 주문해도 되는지 — paper(가상 체결)·키움 모의투자는 바로, 실전은 사용자가 실전 주문에 동의했을 때만
+    (kiwoom.real_orders: true — 대시보드 운영 탭 5단계 또는 ktrade real-orders on. 키를 새로 저장하면 동의는 풀린다)."""
     if cfg.get("broker", "paper") == "paper":
         return True, "paper(가상 체결)"
     if cfg["kiwoom"].get("is_mock", True):
         return True, "키움 모의투자"
-    return False, "실전 계좌는 조건식 성적 기준이 생기기 전까지 막혀 있음"
+    if cfg["kiwoom"].get("real_orders"):
+        return True, "키움 실전 (실전 주문 동의함)"
+    return False, "실전 계좌는 실전 주문 동의 전까지 주문하지 않음 (운영 탭 5단계 또는 ktrade real-orders on)"
 
 
 def _hts_report(a, cfg: dict) -> None:
@@ -739,8 +849,8 @@ def cmd_status(a) -> None:
         print("매매조건 오류:", exc)
     if p["db"].exists():
         s = Store(p["db"], readonly=True)
-        r = s.query("SELECT COUNT(DISTINCT symbol) AS n, MAX(date) AS last FROM ohlcv")
-        print(f"일봉: {int(r['n'].iloc[0])}종목, 마지막 {r['last'].iloc[0]}")
+        d = s.market.daily_stats()
+        print(f"일봉: {d['symbols']}종목, 마지막 {d['to']}")
         t = s.plan_trades(10)
         if not t.empty:
             print(t[["strategy", "symbol", "status", "entry_date", "entry_price", "exit_reason"]].to_string(index=False))
@@ -893,6 +1003,13 @@ def main(argv: list[str] | None = None) -> None:
         (("--real",), {"action": "store_true", "help": "실전투자 키 (기본은 모의투자 키)"}),
         (("--no-check",), {"action": "store_true", "help": "키움 연결 확인 없이 저장"}))
     add("logout", cmd_logout)
+    add("real-orders", cmd_real_orders, (("action",), {"choices": ["on", "off", "show"]}),
+        (("--yes",), {"action": "store_true", "help": "확인 질문 없이 동의"}))
+    add("access", cmd_access, (("action",), {"choices": ["login", "logout", "status"]}), (("--id",), {}),
+        (("--code",), {"help": "이용 코드 (없으면 물어봄)"}))
+    add("admin", cmd_admin, (("action",), {"choices": ["init", "issue", "list"]}), (("id",), {"nargs": "?"}),
+        (("--role",), {"choices": ["backtest", "admin"], "default": "backtest"}),
+        (("--days",), {"type": int, "default": 365, "help": "유효 기간(일). 0 = 만료 없음"}), (("--note",), {}))
     add("strategies", cmd_strategies, aliases=("conditions",))
     add("new", cmd_new, (("id",), {}), aliases=("new-condition", "new-strategy"))
     add("validate", cmd_validate, (("id",), {}), (("--asof",), {}), (("--params",), {}))
@@ -904,9 +1021,19 @@ def main(argv: list[str] | None = None) -> None:
     add("collect", cmd_collect, (("--symbols",), {"help": "이 종목만 (쉼표 구분)"}), (("--symbols-file",), {}),
         (("--markets",), {"help": "시장 이름 (쉼표 구분, 예: 거래소,코스닥,ETF)"}),
         (("--start",), {}), (("--end",), {}), (("--years",), {"type": float}),
-        (("--minute-symbols",), {"help": "1분봉도 받을 종목 (쉼표 구분)"}), (("--minute-start",), {}),
+        (("--exclude-kinds",), {"help": "시장 범위에서 뺄 종류 (쉼표 구분: ETF,ETN,스팩,리츠,우선주)"}),
+        (("--keep-all-kinds",), {"action": "store_true", "help": "종류로 빼지 않음"}),
+        (("--price-min",), {"type": float, "help": "전일 종가(원) 이상"}), (("--price-max",), {"type": float}),
+        (("--cap-min",), {"type": float, "help": "시가총액(억 원) 이상"}), (("--cap-max",), {"type": float}),
+        (("--no-daily",), {"action": "store_true", "help": "일봉은 받지 않음 (분봉·틱만)"}),
+        (("--minute-symbols",), {"help": "분봉도 받을 종목 (쉼표 구분, all = 위 범위 전체)"}), (("--minute-start",), {}),
+        (("--minute-intervals",), {"help": "분 단위 (쉼표 구분: 1,3,5,10,15,30,45,60)"}),
+        (("--tick-symbols",), {"help": "틱도 받을 종목 (쉼표 구분, all = 위 범위 전체)"}), (("--tick-start",), {}),
+        (("--tick-units",), {"help": "틱 단위 (쉼표 구분: 1,3,5,10,30)"}),
         (("--limit",), {"type": int}), (("--dry-run",), {"action": "store_true", "help": "범위만 보여 주고 받지 않음"}))
     add("data", cmd_data, (("--symbols",), {}), (("--all",), {"action": "store_true"}))
+    add("data-dir", cmd_data_dir, (("path",), {"nargs": "?", "help": "새 데이터 폴더 (없으면 지금 폴더만 보여 줌)"}),
+        (("--no-move",), {"action": "store_true", "help": "기존 데이터를 옮기지 않고 폴더만 바꿈"}))
     add("hts", cmd_hts, (("action",), {"choices": ["list", "scan", "watch", "signals", "report"]}),
         (("names",), {"nargs": "*", "help": "조건식 이름 또는 번호 (scan: 하나, watch: 여러 개)"}),
         (("--csv",), {"help": "검색 결과를 CSV로 저장"}), (("--limit",), {"type": int, "default": 50, "help": "화면에 보일 줄 수"}),

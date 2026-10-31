@@ -50,13 +50,11 @@ class Trade:
 
 
 def trading_days(store: Store, start: str, end: str) -> list[str]:
-    r = store.query("SELECT date FROM index_ohlcv WHERE index_code = '001' AND date BETWEEN ? AND ? ORDER BY date", (start, end))
-    return list(r["date"])
+    return store.market.index_dates(start, end)
 
 
 def _future(store: Store, symbol: str, after: str, n: int) -> pd.DataFrame:
-    return store.query("SELECT date, open, high, low, close FROM ohlcv WHERE symbol = ? AND date > ? ORDER BY date LIMIT ?",
-                       (symbol, after, n))
+    return store.market.daily(symbol, after=after, first=n)
 
 
 def fill_price(plan: Plan, bar) -> float | None:
@@ -106,8 +104,8 @@ def _done(d_in, d_out, pos: X.PositionSim, days, cost_pct) -> dict:
 
 
 def _mkt(store: Store, market: str, d0: str, d1: str) -> float | None:
-    r = store.query("SELECT date, close FROM index_ohlcv WHERE index_code = ? AND date IN (?, ?)",
-                    (INDEX_CODE.get(market, "001"), d0, d1))
+    r = store.market.index(INDEX_CODE.get(market, "001"), d0, d1)
+    r = r[r["date"].isin((d0, d1))]
     if len(r) < 2:
         return None
     c = dict(zip(r["date"], r["close"]))
@@ -126,8 +124,7 @@ def run(store: Store, info, cond, rules: dict, start: str, end: str, cost_pct: f
         if picks:
             plans = compose(list(picks), rules, view)
             syms = [p.symbol for p in plans]
-            r = store.query(f"SELECT symbol, close FROM ohlcv WHERE date = ? AND symbol IN ({','.join('?' * len(syms))})", (d, *syms))
-            ok, rej = guard.screen([(info.id, plans)], dict(zip(r["symbol"], r["close"])), max_per_day)
+            ok, rej = guard.screen([(info.id, plans)], store.market.closes(d, syms), max_per_day)
             n_rej += len(rej)
             for p in ok[info.id]:
                 n_picks += 1

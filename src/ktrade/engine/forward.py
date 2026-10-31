@@ -55,8 +55,7 @@ def signal_dates(store: Store, day: str | None = None, days: int | None = None) 
 
 
 def _minutes(store: Store, symbol: str, day: str) -> pd.DataFrame:
-    return store.query("SELECT ts, open, high, low, close, volume FROM minute_ohlcv WHERE symbol = ? AND ts BETWEEN ? AND ? "
-                       "ORDER BY ts", (symbol, f"{day} 09:00:00", f"{day} 15:30:59"))
+    return store.market.minute(symbol, f"{day} 09:00:00", f"{day} 15:30:59")
 
 
 def collect_minutes(store: Store, cfg: dict, days: list[str]) -> int:

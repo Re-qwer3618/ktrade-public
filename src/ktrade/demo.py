@@ -36,6 +36,7 @@ def config(base_cfg: dict) -> dict:
     """체험용 설정: 사용자 설정을 바탕으로 폴더만 demo/ 로, 예제 매매조건 2개를 켠 상태."""
     cfg = copy.deepcopy(base_cfg)
     cfg["_home"] = str(home(base_cfg))
+    cfg["data_dir"] = None                                  # 체험 데이터는 늘 demo/data (내 데이터 폴더와 섞지 않음)
     cfg["_secrets"] = {"app_key": "", "app_secret": ""}
     cfg["_demo"] = True
     cfg["broker"] = "paper"
@@ -83,6 +84,11 @@ def _bars(rng: np.random.Generator, close: np.ndarray, ret: np.ndarray, days: li
 
 
 def make_market(store: Store, n_days: int = 500, seed: int = 7, end: date | None = None) -> list[str]:
+    with store.market.batch():
+        return _make(store, n_days, seed, end)
+
+
+def _make(store: Store, n_days: int, seed: int, end: date | None) -> list[str]:
     rng = np.random.default_rng(seed)
     days = _days(n_days, end)
     for code, start in (("001", 2500.0), ("101", 800.0)):

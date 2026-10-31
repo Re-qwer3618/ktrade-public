@@ -9,8 +9,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from ktrade import access
 from ktrade import config as config_mod
 from ktrade.data.store import Store
+
+TEST_SEED = bytes(range(32))
 
 
 def _days(n=80):
@@ -51,6 +54,9 @@ def home(tmp_path, monkeypatch):
     monkeypatch.delenv("KIWOOM_APP_KEY", raising=False)
     monkeypatch.delenv("KIWOOM_APP_SECRET", raising=False)
     monkeypatch.setenv("KTRADE_NO_KEYRING", "1")      # 테스트가 실제 자격 증명 저장소를 건드리지 않게
+    # 테스트 전용 서명 키로 발급한 관리자 코드 — 백테스트 테스트가 그대로 돌게 (잠금 확인은 test_access.py에서 지운다)
+    monkeypatch.setattr(access, "PUBLIC_KEYS", (access.public_key(TEST_SEED).hex(),))
+    monkeypatch.setenv("KTRADE_ACCESS_CODE", access.issue(TEST_SEED, "tester", "admin", None))
     return tmp_path / "home"
 
 

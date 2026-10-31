@@ -31,7 +31,7 @@ def checks(cfg: dict, online: bool = True) -> list[tuple[str, bool | None, str]]
         from ktrade.data.store import Store
         s = Store(p["db"], readonly=True)
         last = s.last_index_date_before("9999-12-31")
-        n = int(s.query("SELECT COUNT(DISTINCT symbol) AS n FROM ohlcv")["n"].iloc[0])
+        n = s.market.daily_stats()["symbols"]
         stale = last is None or (date.today() - date.fromisoformat(last)).days > 5
         out.append(("시세 데이터", None if n else False, f"{n}종목, 마지막 지수 일봉 {last}" + (" — 오래됨 (ktrade collect)" if stale else "")
                     + " · 받을 범위는 config collect, 받아 둔 범위는 ktrade data"))

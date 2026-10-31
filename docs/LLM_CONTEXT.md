@@ -70,7 +70,7 @@ from ktrade.sdk import Condition, Context, Entry, Pick
 | `daily(symbol, bars=300)` | DataFrame, index=날짜(DatetimeIndex), 열 `open high low close volume` (수정주가, 오래된 → 최근) |
 | `daily_all(bars=300)` | 전 종목 긴 표: 열 `symbol date open high low close volume` (`date`는 "YYYY-MM-DD" 문자열), symbol·date 순 |
 | `index(market="코스피", bars=300)` | 지수 일봉 ("코스피"/"코스닥") |
-| `universe()` | `code name market market_name state` — market: "코스피"/"코스닥", market_name: "거래소"/"코스닥"/"ETF"/…, state에 "관리종목"·"거래정지" 등 |
+| `universe()` | `code name market market_name state last_price list_count order_warning audit_info up_name up_size` — market: "코스피"/"코스닥", market_name: "거래소"/"코스닥"/"ETF"/…, state에 "관리종목"·"거래정지" 등, last_price 전일 종가(원)·list_count 상장주식수(시가총액 = 둘의 곱)·order_warning "0" 없음/"2"~"5" 투자유의 — 종목 목록을 받은 날 기준(예전 목록이면 빈 값) |
 | `minute(symbol, day)` | 그날 1분봉 (수집된 종목만) |
 | `trading_days(n)` | 최근 n 거래일 |
 

@@ -21,13 +21,14 @@
 | **종목 선정** — 장 마감 후 어떤 종목을 고를지 | **손절·이익실현·추적 손절·보유기간** (설정으로 고름) |
 | **매수 타이밍** — 다음 거래일 어떤 가격 조건에서 살지 | 데이터 수집, 계획 검사, 주문 실행, 기록 |
 | | **백테스트 + 실험 기록·비교** (조건을 바꿀 때마다) |
-| **받을 데이터 범위** — 종목·시장·기간 (설정) | 키움 REST API로 받아 DB에 쌓기(이어받기) |
+| **받을 데이터 범위** — 종목·시장·기간·종류·가격·시가총액·봉(일·분·틱) (설정) | 키움 REST API로 받아 쌓기(이어받기) |
 
 ```
 ~/.ktrade/strategies/<조건 id>/strategy.yaml + strategy.py   ← 매매조건 (직접 또는 Claude·Gemini 등 AI로 작성)
 ~/.ktrade/config.yaml  collect / backtest                    ← 받을 데이터 범위, 백테스트 기간·대상 종목
 ~/.ktrade/config.yaml  exits / strategies.enabled            ← 엔진 손절·익절 설정, 켤 조건
-~/.ktrade/data/market.db                                     ← 키움에서 받은 시세 (ktrade data로 범위 확인)
+~/.ktrade/data/market/                                       ← 키움에서 받은 시세 (종류별 폴더·기간별 Parquet, ktrade data로 확인)
+~/.ktrade/data/market.db                                     ← 종목 목록·매매 기록·조건식 신호
 ~/.ktrade/experiments/<조건 id>/                              ← ktrade test 할 때마다 쌓이는 실험 기록
 ```
 
@@ -68,8 +69,19 @@ curl -LsSf https://raw.githubusercontent.com/Re-qwer3618/ktrade-public/main/scri
 - **🔑 키움 로그인** — 본인 키움 REST API 앱키·시크릿키를 입력하면 연결을 확인하고 이 PC의 Windows 자격 증명 관리자
   (macOS 키체인)에 저장합니다. 파일을 따로 만들 필요가 없습니다. 이어서 대시보드에서 몇 종목 시세를 받아 바로 실험할 수 있습니다.
   명령창에서는 `ktrade login` (실전 키는 `--real`), 지우기는 `ktrade logout`.
-- **🧪 체험 모드** — 키 없이 가상 종목·가상 시세로 모든 화면(예제 매매조건 백테스트·계획·매매 기록·성적·차트)을 둘러봅니다.
-  어떤 프로그램인지 보고 계속 쓸지 정할 때. 숫자는 가상이라 의미가 없습니다.
+- **🧪 체험 모드** — 키 없이 가상 종목·가상 시세로 **백테스트** 화면만 써 봅니다(예제 매매조건 2개). 숫자는 가상이라 의미가 없습니다.
+
+**기능 구분**
+
+| 구분 | 필요한 것 | 기능 |
+|---|---|---|
+| 체험 | 없음 | 백테스트 (가상 데이터) |
+| 기본 기능 | 내 키움 앱키 로그인 | 운영(조건식 자동매매) · 계획 · 매매 기록 · 성적 · 영웅문 조건식 · 종목 차트 |
+| 백테스트 | 키움 로그인 + **이용 코드 로그인** | 내 데이터로 매매조건 실험 (`ktrade test`·`backtest`·`experiments`·`compare`, 대시보드 🧪 백테스트 탭) |
+| 관리자 | 관리자 이용 코드 | 위 전부 + 이용 코드 발급 (대시보드 🛠️ 관리자 탭, `ktrade admin issue`) |
+
+이용 코드는 관리자가 발급하는 서명된 코드(`KT1.…`)입니다. 서버 없이 어느 PC에서나 확인되고 위조할 수 없습니다.
+받은 사람은 대시보드 사이드바 **🔓 백테스트 로그인** 또는 `ktrade access login`.
 
 (예전 방식인 `~/.ktrade/.env`·환경변수 `KIWOOM_APP_KEY`/`KIWOOM_APP_SECRET`도 계속 읽으며, 있으면 그쪽이 우선합니다.)
 
@@ -81,32 +93,65 @@ curl -LsSf https://raw.githubusercontent.com/Re-qwer3618/ktrade-public/main/scri
   → 저장(`config.yaml`, 바꾸기 전 파일은 `config.yaml.bak`) → ⑤ 시작·중지
 - 오른쪽: 편입 종목 · 보유 · 미체결 · 체결, 실시간 로그 (3초마다 갱신)
 - 대시보드가 직접 주문하지는 않습니다. **시작**은 `ktrade hts watch`를 따로 띄우고(대시보드를 닫아도 계속), 주문은 그 엔진이 냅니다.
-  조건식 매매는 paper·키움 모의투자에서만 주문하고 실전 계좌는 막혀 있습니다.
+  ⑤에서 주문 방식(가상 체결 / 내 키움 계좌)을 고릅니다. 실전 키는 **실전 주문 동의**를 해야만 실전 계좌로 주문하고, 그 전에는
+  관찰로만 동작합니다(`kiwoom.real_orders`, 명령창 `ktrade real-orders on|off`). 키를 새로 저장하면 동의는 풀립니다.
 
 ## 1. 데이터 범위 정하고 받기
 
 무엇을 얼마나 받을지는 직접 정합니다. `config.yaml`의 `collect`가 기본이고(`ktrade daily`도 이대로 매일 이어받음),
 `ktrade collect` 옵션은 그 실행에서만 덮어씁니다.
 
+대시보드 **📥 데이터** 탭에서 같은 설정을 고르고, 범위에 드는 종목을 미리 보고(가격·시가총액), 바로 받을 수도 있습니다.
+
 ```yaml
 collect:
-  symbols: [005930, 000660]    # 종목 직접 지정 — 비면 market_names 시장 전체
+  symbols: []                  # 종목 직접 지정 — 비면 market_names 시장 전체에서 아래 조건으로 고름
   symbols_file: null           # 또는 종목 파일 (한 줄에 하나)
   market_names: [거래소, 코스닥] # ETF도 쓰려면 ETF 추가
-  exclude: []                  # 빼고 받을 종목
+  exclude_kinds: [ETF, ETN, 스팩, 우선주]   # 뺄 종류 (리츠도 가능)
+  exclude_warning: true        # 투자유의(정리매매·단기과열·투자위험·투자경고) 제외
+  price: {min: 1000, max: null}       # 전일 종가(원)
+  market_cap: {min: 500, max: null}   # 시가총액(억 원)
   start: 2020-01-01            # 비면 오늘부터 years년 전
   end: null                    # 비면 오늘까지
-  minute: {symbols: [], start: null}   # 1분봉도 받을 종목 (키움이 주는 범위까지)
+  daily: true                  # 일봉
+  minute: {symbols: [005930], intervals: [1], start: null}   # N분봉 (all = 위 범위 전체). 1분봉만 받아도 차트에서 3·5·10분…으로 묶어 봄
+  tick: {symbols: [], units: [1]}     # N틱 (1·3·5·10·30) — 키움은 최근 며칠만 줌
+
+chart:
+  ma: [5, 20, 60, 120]         # 차트 이동평균선 (저장하지 않고 볼 때 계산)
+  volume_ma: [20]
 ```
 
 ```bash
 ktrade collect --dry-run                                    # 받을 범위만 확인
 ktrade collect                                              # config대로 받기 (이미 있는 구간은 건너뜀)
 ktrade collect --symbols 005930,000660 --start 2018-01-02   # 이번만 이 종목·기간
-ktrade collect --markets 거래소,코스닥,ETF --years 5 --limit 100
-ktrade data                                                 # DB에 받아 둔 범위 (종목 수·기간·분봉)
+ktrade collect --price-min 1000 --cap-min 500 --exclude-kinds ETF,스팩,우선주 --limit 100
+ktrade collect --no-daily --minute-symbols 005930 --minute-intervals 1,5 --tick-symbols 005930 --tick-units 10
+ktrade data                                                 # 받아 둔 범위 (종목 수·기간·분봉·틱) + 종류별 용량
 ktrade data --symbols 005930                                # 종목별 범위
+ktrade data-dir                                             # 데이터 폴더·남은 공간
+ktrade data-dir D:\ktrade-data                              # 다른 폴더(드라이브)로 — 기존 데이터도 옮김 (--no-move면 폴더만)
 ```
+
+시세는 **종류별 폴더 + 기간별 Parquet 파일**로 저장합니다 (`~/.ktrade/data/market/`).
+
+```
+daily/2026.parquet           일봉 (그해 전 종목)
+index/index.parquet          코스피·코스닥 지수 일봉
+minute/1m/2026-10.parquet    N분봉 (그달 전 종목, 폴더 = 분 단위)
+tick/1t/2026-10-30.parquet   N틱 (그날 전 종목)
+orderbook/2026-10-30.parquet 호가 (실시간으로 쌓은 것만 — 키움은 지난 호가를 주지 않음)
+```
+
+- 종목별이 아니라 기간별로 나눕니다: 백테스트는 '그날 전 종목'을 읽고, 매일 이어받기는 새 기간 파일 하나만 바꿉니다.
+  한 파일 안은 종목·시각순이라 한 종목만 읽어도 그 부분만 읽습니다.
+- 지난 기간 파일은 바뀌지 않으니 **새 파일만 복사하면 백업**이 끝나고, 오래된 해는 폴더째 옮겨도 됩니다.
+- 압축돼서 SQLite보다 작습니다 (실측: 일봉 1,170만 행 843 MB → 161 MB, 1분봉 325만 행 26 MB).
+- **저장 위치는 바꿀 수 있습니다**: `config.yaml` `data_dir`(비우면 사용자 폴더 안 `data`), 대시보드 📥 데이터 탭 '📁 저장 위치 바꾸기' 또는 `ktrade data-dir <폴더>`.
+  바꿀 때 DB·시세 폴더·가상 체결 장부를 같이 옮깁니다(자동매매가 돌고 있으면 멈춘 뒤). 설정·매매조건·실험 기록은 사용자 폴더에 그대로.
+- 0.7 이전의 `market.db` 시세 표는 처음 열 때 자동으로 옮기고(행 수 확인 뒤) 지웁니다. 종목 목록·매매 기록은 그대로 `market.db`에 남습니다.
 
 시작일을 앞당기면 모자란 앞부분을 채웁니다. 전 종목 몇 년치는 처음 몇 시간 걸립니다(다른 DB가 있으면 `ktrade import-db`).
 
@@ -168,7 +213,7 @@ ktrade report                     # 실제 결과 (매매조건·버전별)
 ktrade status · ktrade doctor · ktrade dashboard
 ```
 
-운영·문제 해결은 [운영 가이드](docs/OPERATIONS.md). 실전 계좌(`kiwoom.is_mock: false`)는 `ktrade run --live-confirm`으로만 시작합니다.
+운영·문제 해결은 [운영 가이드](docs/OPERATIONS.md). 새 PC에서 처음부터 확인하는 순서는 [docs/FIRST_RUN_TEST.md](docs/FIRST_RUN_TEST.md). 실전 계좌(`kiwoom.is_mock: false`)는 `ktrade run --live-confirm`으로만 시작합니다.
 
 ## 5. 영웅문 조건검색식 (미리보기)
 
@@ -194,7 +239,11 @@ ktrade hts scan 41 --csv result.csv   # 결과를 CSV로
 | `exits.*` | 손절 -7%, 익절 +10%, 10일 | 엔진 손절·익절 (위) |
 | `collect.symbols` / `symbols_file` / `market_names` | 없음 / 없음 / 거래소·코스닥 | 받을 종목 (지정이 없으면 시장 전체) |
 | `collect.start` / `end` / `years` | 없음 / 없음 / 3 | 받을 기간 |
-| `collect.minute.symbols` | 없음 | 1분봉도 받을 종목 |
+| `data_dir` | 없음 (`~/.ktrade/data`) | 시세·DB 폴더. 다른 드라이브도 가능 (`ktrade data-dir`로 옮기기) |
+| `collect.exclude_kinds` / `exclude_warning` | ETF·ETN·스팩·우선주 / 켬 | 시장 범위에서 뺄 종류, 투자유의 제외 |
+| `collect.price` / `market_cap` | 없음 | 전일 종가(원)·시가총액(억 원) 범위 `{min, max}` |
+| `collect.daily` / `minute` / `tick` | 켬 / 없음 / 없음 | 받을 봉: 일봉, N분봉(`symbols`·`intervals`), N틱(`symbols`·`units`) |
+| `chart.ma` / `volume_ma` | 5·20·60·120 / 20 | 차트 이동평균선 (봉 개수) |
 | `backtest.start` / `end` / `years` / `symbols` | 없음 / 없음 / 3 / 없음 | 백테스트 기간·대상 종목 (없으면 DB 전 종목) |
 | `backtest.cost_pct` / `oos_ratio` | 0.25 / 0.3 | 왕복 비용, 확인용 뒤 기간 비율 |
 | `strategies.enabled` | 없음 | 켤 내 조건(위에 있을수록 우선), 조건별 `params`·`exits` |

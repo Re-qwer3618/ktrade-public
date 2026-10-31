@@ -62,7 +62,9 @@ NO_DASHBOARD=1 NO_SHORTCUT=1 sh install.sh      # 받은 install.sh로, 명령�
   삼성전자 현재가를 한 번 조회해 확인하고(주문 없음), 키는 이 PC의 Windows 자격 증명 관리자(macOS 키체인, Linux Secret Service)에
   저장됩니다. 그런 저장소가 없는 환경에서만 `~/.ktrade/credentials.json`에 둡니다. 로그인 뒤 DB가 비어 있으면 대시보드에서
   몇 종목 시세를 바로 받을 수 있습니다.
-- **체험 모드**: 키 없이 가상 종목·가상 시세로 모든 화면을 둘러봅니다(`~/.ktrade/demo/`, 실제 데이터와 섞이지 않음).
+- **체험 모드**: 키 없이 가상 종목·가상 시세로 백테스트 화면만 써 봅니다(`~/.ktrade/demo/`, 실제 데이터와 섞이지 않음).
+- **백테스트 로그인**: 내 데이터로 백테스트하려면 관리자에게 받은 아이디·이용 코드로 추가 로그인합니다
+  (사이드바 **🔓 백테스트 로그인** 또는 `ktrade access login`). 자동매매 등 기본 기능은 키움 로그인만으로 씁니다.
 
 명령창에서 하려면:
 
@@ -77,13 +79,16 @@ ktrade logout          # 저장한 키 지우기
 ## 3. 데이터 받기 (범위는 직접 정함)
 
 `~/.ktrade/config.yaml`의 `collect`에 받을 종목(`symbols`, 비우면 `market_names` 시장 전체)·기간(`start`·`end`, 또는 `years`)을 적습니다.
+시장 전체일 때는 뺄 종류(`exclude_kinds`: ETF·ETN·스팩·리츠·우선주), 전일 종가(`price`)·시가총액(`market_cap`, 억 원) 범위로 좁히고,
+분봉(`minute`)·틱(`tick`)도 받을 수 있습니다. 대시보드 **📥 데이터** 탭에서 같은 설정을 고르고 대상 종목을 미리 볼 수 있습니다.
 
 ```bash
 ktrade collect --dry-run                              # 받을 범위만 확인
 ktrade collect --symbols 005930,000660 --years 5      # 몇 종목만 먼저 (몇 초)
 ktrade collect --limit 100                            # 시장 전체 중 100종목 (몇 분)
 ktrade collect                                        # config대로 (전 종목이면 처음엔 몇 시간, 이후엔 이어받기라 몇 분)
-ktrade data                                           # 받아 둔 범위
+ktrade data                                           # 받아 둔 범위·종류별 용량 (~/.ktrade/data/market/)
+ktrade data-dir D:\ktrade-data                        # 저장 위치를 다른 드라이브로 (기존 데이터도 옮김, 대시보드 📥 데이터 탭에서도 가능)
 ```
 
 ## 4. 연습 → 모의투자

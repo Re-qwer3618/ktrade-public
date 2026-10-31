@@ -27,9 +27,8 @@ log = logging.getLogger("ktrade.planner")
 
 
 def last_trading_day(store: Store, on_or_before: str | None = None) -> str | None:
-    r = store.query("SELECT MAX(date) AS d FROM index_ohlcv WHERE index_code = '001' AND date <= ?",
-                    (on_or_before or date.today().isoformat(),))
-    return r["d"].iloc[0] if not r.empty else None
+    d = store.market.index_dates(end=on_or_before or date.today().isoformat(), last=1)
+    return d[0] if d else None
 
 
 def compose(picks: list[Pick], rules: dict, view: DataView) -> list[Plan]:
@@ -105,11 +104,7 @@ def run_plans(cfg: dict, store: Store, asof: str | None = None, out_dir: Path | 
             errors[item.get("id", item["dir"])] = str(exc)
 
     symbols = sorted({p.symbol for _, _, ps, _ in produced for p in ps})
-    closes = {}
-    if symbols:
-        r = store.query(f"SELECT symbol, close FROM ohlcv WHERE date = ? AND symbol IN ({','.join('?' * len(symbols))})",
-                        (asof, *symbols))
-        closes = dict(zip(r["symbol"], r["close"]))
+    closes = store.market.closes(asof, symbols) if symbols else {}
     ok, rejected = guard.screen([(sid, ps) for sid, _, ps, _ in produced], closes, int(cfg["risk"]["max_plans_per_strategy"]))
 
     out.mkdir(parents=True, exist_ok=True)

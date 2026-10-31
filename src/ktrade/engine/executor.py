@@ -107,7 +107,7 @@ def clear_halt(store: Store) -> None:
 def daily_pnl(store: Store, quote_fn, today: str) -> dict:
     """오늘 손익(원, 비용 제외) — 오늘 매도한 실현 손익 + 보유 중 평가 손익. ktrade가 낸 주문(plan_trades)만 센다."""
     r = store.query("SELECT * FROM plan_trades WHERE status IN ('submitted', 'open', 'closing') "
-                    "OR substr(updated_at, 1, 10) = ?", (today,))
+                    "OR substr(updated_at, 1, 10) >= ?", (today,))   # 매도 시각(sells.at)으로 다시 거름
     realized = unrealized = 0.0
     for t in r.to_dict("records"):
         fills, sells, _ = book(t)

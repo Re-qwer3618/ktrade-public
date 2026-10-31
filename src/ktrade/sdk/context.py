@@ -39,43 +39,35 @@ class DataView:
 
     def trading_days(self, n: int) -> list[str]:
         """asof까지 최근 n 거래일 (코스피 지수 일봉이 있는 날)."""
-        r = self._s.query("SELECT date FROM index_ohlcv WHERE index_code = '001' AND date <= ? ORDER BY date DESC LIMIT ?",
-                          (self.asof, n))
-        return sorted(r["date"])
+        return self._s.market.index_dates(end=self.asof, last=n)
 
     def daily(self, symbol: str, bars: int = 300) -> pd.DataFrame:
         if self.symbols is not None and symbol not in self.symbols:
             return _frame(pd.DataFrame(), "date")
-        r = self._s.query("SELECT date, open, high, low, close, volume FROM ohlcv WHERE symbol = ? AND date <= ? "
-                          "ORDER BY date DESC LIMIT ?", (symbol, self.asof, bars))
-        return _frame(r.iloc[::-1], "date")
+        return _frame(self._s.market.daily(symbol, end=self.asof, last=bars), "date")
 
     def daily_all(self, bars: int = 300) -> pd.DataFrame:
         """전 종목 최근 bars 거래일 일봉 (긴 표: symbol, date, open…). 장 마감 후 전 종목을 훑는 전략용."""
         days = self.trading_days(bars)
         if not days:
             return pd.DataFrame(columns=["symbol", "date", "open", "high", "low", "close", "volume"])
-        return self._allowed(self._s.query("SELECT symbol, date, open, high, low, close, volume FROM ohlcv "
-                                           "WHERE date BETWEEN ? AND ? ORDER BY symbol, date", (days[0], days[-1])), "symbol")
+        return self._s.market.daily_between(days[0], days[-1], self.symbols)
 
     def index(self, market: str = "코스피", bars: int = 300) -> pd.DataFrame:
         code = INDEX_CODE.get(market, market)
-        r = self._s.query("SELECT date, open, high, low, close, volume FROM index_ohlcv WHERE index_code = ? AND date <= ? "
-                          "ORDER BY date DESC LIMIT ?", (code, self.asof, bars))
-        return _frame(r.iloc[::-1], "date")
+        return _frame(self._s.market.index(code, end=self.asof, last=bars), "date")
 
     def universe(self) -> pd.DataFrame:
-        """code, name, market('코스피'/'코스닥'), market_name(거래소/코스닥/리츠…), state(관리종목·거래정지 등)."""
-        u = self._s.query("SELECT code, name, market, market_name, state FROM universe")
+        """code, name, market('코스피'/'코스닥'), market_name(거래소/코스닥/리츠…), state(관리종목·거래정지 등),
+        last_price(전일 종가)·list_count(상장주식수)·order_warning(투자유의 0=없음)·up_name(업종)·up_size(규모) — 받은 때 기준."""
+        u = self._s.universe().drop(columns=["updated_at"], errors="ignore")
         u["market"] = u["market"].map(lambda m: MARKET_OF.get(str(m), str(m)))
         return self._allowed(u, "code")
 
     def minute(self, symbol: str, day: str) -> pd.DataFrame:
         if day > self.asof or (self.symbols is not None and symbol not in self.symbols):
             return _frame(pd.DataFrame(), "ts")
-        r = self._s.query("SELECT ts, open, high, low, close, volume FROM minute_ohlcv WHERE symbol = ? AND ts >= ? "
-                          "AND ts <= ? ORDER BY ts", (symbol, f"{day} 09:00", f"{day} 15:30:59"))
-        return _frame(r, "ts")
+        return _frame(self._s.market.minute(symbol, f"{day} 09:00", f"{day} 15:30:59"), "ts")
 
 
 @dataclass

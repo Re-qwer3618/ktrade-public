@@ -33,6 +33,12 @@ def import_db(store: Store, src: str | Path, since: str | None = None, minute_da
     if daily is None:
         raise FileNotFoundError(f"일봉 DB를 찾지 못했습니다: {src}")
     stats = {}
+    with store.market.batch():
+        _import(store, daily, src, since, minute_days, symbols, stats)
+    return stats
+
+
+def _import(store: Store, daily: Path, src: Path, since, minute_days, symbols, stats: dict) -> None:
     c = _ro(daily)
     try:
         u = pd.read_sql_query("SELECT code, name, market, market_name, state FROM universe", c)
@@ -47,7 +53,8 @@ def import_db(store: Store, src: str | Path, since: str | None = None, minute_da
             q = (f"SELECT symbol, date, open, high, low, close, volume FROM ohlcv WHERE symbol IN ({','.join('?' * len(part))})"
                  + (" AND date >= ?" if since else ""))
             df = pd.read_sql_query(q, c, params=(*part, *((since,) if since else ())))
-            n += sum(store.upsert_daily(s, g) for s, g in df.groupby("symbol"))
+            n += store.market.write_daily(df)
+            store.market.flush()
         stats["daily_bars"] = n
     finally:
         c.close()
@@ -61,7 +68,6 @@ def import_db(store: Store, src: str | Path, since: str | None = None, minute_da
                 if len(days):
                     m = pd.read_sql_query("SELECT symbol, timestamp AS ts, open, high, low, close, volume FROM intraday_ohlcv "
                                           "WHERE interval = '1m' AND timestamp >= ?", c, params=(days.min(),))
-                    stats["minute_bars"] = sum(store.upsert_minute(s, g) for s, g in m.groupby("symbol"))
+                    stats["minute_bars"] = store.market.write_minute(m)
             finally:
                 c.close()
-    return stats

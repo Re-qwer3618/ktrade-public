@@ -9,7 +9,7 @@ def build(cfg: dict, store) -> Broker:
     kind = cfg.get("broker", "paper")
     if kind == "paper":
         from ktrade.config import paths
-        return PaperBroker(paths(cfg)["home"] / "data" / "paper_broker.json", cfg["paper"]["starting_cash"])
+        return PaperBroker(paths(cfg)["data"] / "paper_broker.json", cfg["paper"]["starting_cash"])
     if kind == "kiwoom":
         from ktrade.broker.kiwoom import KiwoomBroker
         return KiwoomBroker(cfg)

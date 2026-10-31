@@ -4,14 +4,16 @@
     키움 앱키               대시보드 로그인 화면 또는 `ktrade login`으로 입력 → OS 자격 증명 저장소 (ktrade/credentials.py)
                             (예전 방식 ~/.ktrade/.env·환경변수 KIWOOM_APP_KEY/SECRET도 읽으며 그쪽이 우선)
     ~/.ktrade/demo/         체험 모드용 가상 데이터 (키 없이 둘러보기, ktrade/demo.py)
-    ~/.ktrade/data/         market.db (시세·매매 기록)
+    ~/.ktrade/data/         market/ (시세 Parquet: daily·index·minute·tick·orderbook 폴더) + market.db (종목 목록·매매 기록)
+                            — config data_dir로 다른 폴더(다른 드라이브)에 둘 수 있다 (ktrade data-dir, 대시보드 📥 데이터 탭)
     ~/.ktrade/plans/        장 마감 후 만든 계획 파일 (<기준일>/<조건>.json)
     ~/.ktrade/strategies/   내 매매조건 폴더들 (조건 하나 = 폴더 하나, strategy.yaml + strategy.py)
     ~/.ktrade/experiments/  백테스트 실험 기록 (조건을 바꿀 때마다 쌓이고 비교된다)
 
 역할: 매매조건(종목 선정·매수 타이밍)은 사용자, 손절·이익실현·보유기간(exits)·실행·백테스트는 엔진.
 안전 기본값: broker는 paper(가상 체결), kiwoom을 고르더라도 is_mock: true(키움 모의투자 서버).
-실전(is_mock: false)은 사용자가 직접 바꾸고 `ktrade run --live-confirm`으로만 켜진다.
+실전(is_mock: false) 주문은 사용자가 동의해야만 나간다 — 조건식 매매는 kiwoom.real_orders: true(운영 탭 5단계·ktrade real-orders on),
+매매조건 계획 실행은 `ktrade run --live-confirm`.
 """
 from __future__ import annotations
 
@@ -22,8 +24,9 @@ from pathlib import Path
 import yaml
 
 DEFAULTS: dict = {
+    "data_dir": None,                  # 시세·DB 폴더. 비면 <KTRADE_HOME>/data, 상대 경로는 KTRADE_HOME 기준
     "broker": "paper",                 # paper(가상 체결, 키 없이 연습) | kiwoom
-    "kiwoom": {"is_mock": True},
+    "kiwoom": {"is_mock": True, "real_orders": False},
     "paper": {"starting_cash": 10_000_000},
     "exits": {                         # 손절·이익실현 (엔진 몫) — 조건별 덮어쓰기는 strategy.yaml exits / enabled[].exits
         "stop": {"type": "pct", "value": 7.0, "period": 14, "buffer_pct": 1.0},
@@ -63,20 +66,31 @@ DEFAULTS: dict = {
         "symbols": [], "symbols_file": None,                   # 종목 직접 지정. 비면 market_names 시장 전체
         "market_names": ["거래소", "코스닥"],                  # ETF도 쓰려면 "ETF" 추가
         "exclude": [], "exclude_states": ["관리종목", "거래정지"],
+        "exclude_kinds": ["ETF", "ETN", "스팩", "우선주"],      # 시장 범위에서 뺄 종류 (collect.KINDS)
+        "exclude_warning": True,                               # 투자유의(정리매매·단기과열·투자위험·투자경고) 제외
+        "price": {"min": None, "max": None},                   # 전일 종가(원) 범위
+        "market_cap": {"min": None, "max": None},              # 시가총액(억 원) 범위
         "start": None, "end": None, "years": 3,                # 기간: start~end, start가 비면 오늘부터 years년 전
-        "minute": {"symbols": [], "start": None},              # 1분봉도 받을 종목 (키움이 주는 범위까지)
+        "daily": True,                                         # 일봉 받기
+        "minute": {"symbols": [], "intervals": [1], "start": None},  # N분봉 받을 종목 (all = 위 범위 전체), 키움이 주는 범위까지
+        "tick": {"symbols": [], "units": [1], "start": None, "max_pages": 50},  # N틱봉 (키움은 최근 며칠만 줌)
     },
+    "chart": {"ma": [5, 20, 60, 120], "volume_ma": [20]},     # 차트 이동평균선 (저장하지 않고 볼 때 계산)
     "live": {"interval_sec": 60, "market_open": "09:00", "market_close": "15:30"},
 }
 
 TEMPLATE = """# ktrade 설정 — 바꾼 뒤 ktrade run을 다시 시작해야 반영됩니다.
 # 역할: 매매조건(종목 선정·매수 타이밍)은 내가 strategies/ 에 작성, 손절·이익실현·실행·백테스트는 엔진.
 
+# 시세·DB를 둘 폴더 (비우면 사용자 폴더 안 data). 옮길 때는 ktrade data-dir <새 폴더> 또는 대시보드 📥 데이터 탭 — 기존 데이터도 같이 옮겨 줌
+data_dir: null
+
 # paper = 가상 체결(키 없이 연습), kiwoom = 키움 REST API 주문
 broker: paper
 
 kiwoom:
   is_mock: true        # true = 키움 모의투자 서버. 실전(false)은 충분한 백테스트·모의 운영 뒤 본인 판단으로만.
+  real_orders: false   # 실전 키일 때 조건식 매매가 실제로 주문해도 되는지 (본인 동의). 키를 새로 저장하면 false로 돌아감
 
 paper:
   starting_cash: 10000000
@@ -145,14 +159,32 @@ collect:
   symbols: []                  # 종목 직접 지정 (예: [005930, 000660]). 비면 아래 시장 전체
   symbols_file: null           # 또는 종목 파일 (한 줄에 하나, ~/.ktrade 기준 상대경로 가능)
   market_names: [거래소, 코스닥] # symbols가 비었을 때 받을 시장. ETF도 쓰려면 ETF 추가
+  # ↓ 시장 범위에서 고르기 (symbols로 직접 지정한 종목에는 적용하지 않음)
   exclude: []                  # 빼고 받을 종목
   exclude_states: [관리종목, 거래정지]
+  exclude_kinds: [ETF, ETN, 스팩, 우선주]   # 뺄 종류: ETF ETN 스팩 리츠 우선주
+  exclude_warning: true        # 투자유의(정리매매·단기과열·투자위험·투자경고) 제외
+  price: {min: null, max: null}       # 전일 종가(원), 예: {min: 1000, max: 50000}
+  market_cap: {min: null, max: null}  # 시가총액(억 원), 예: {min: 500}
   start: null                  # 예: 2020-01-01  (비면 오늘부터 years년 전)
   end: null                    # 예: 2025-12-31  (비면 오늘까지, 매일 이어받기)
   years: 3
-  minute:                      # 1분봉 (선택, 지정 종목만 — 키움이 주는 범위까지, 보통 최근 몇 달)
-    symbols: []
+  daily: true                  # 일봉
+  minute:                      # N분봉 (선택) — 키움이 주는 범위까지(보통 최근 몇 달), 그 뒤로는 매일 이어받아 쌓임
+    symbols: []                # 종목 목록, 또는 all = 위 범위 전체 (오래 걸림)
+    intervals: [1]             # 1 3 5 10 15 30 45 60 (1분봉만 받아도 차트에서 3·5·10분으로 묶어 볼 수 있음)
     start: null
+  tick:                        # N틱봉 (선택) — 키움은 최근 며칠만 줌, 매일 받아야 쌓임
+    symbols: []
+    units: [1]                 # 1 3 5 10 30
+    start: null
+    max_pages: 50              # 종목·하루당 최대 요청 수 (1틱은 하루에 수만 건)
+# 호가창은 키움이 지난 기록을 주지 않아 받을 수 없습니다 (실시간으로 쌓은 것만 data/market/orderbook/).
+
+# 차트 이동평균선 — 저장하지 않고 볼 때 종가·거래량으로 계산
+chart:
+  ma: [5, 20, 60, 120]         # 가격 이동평균 (봉 개수)
+  volume_ma: [20]              # 거래량 이동평균
 
 live:
   interval_sec: 60
@@ -177,7 +209,8 @@ def update_sections(updates: dict, path: Path | None = None) -> Path:
     old = p.read_text(encoding="utf-8") if p.exists() else TEMPLATE
     lines = old.splitlines(keepends=True)
     for key, value in updates.items():
-        block = yaml.safe_dump({key: value}, allow_unicode=True, sort_keys=False, default_flow_style=None, width=120)
+        flow = None if isinstance(value, (dict, list)) else False           # 값 하나면 '{key: v}'가 아니라 'key: v'
+        block = yaml.safe_dump({key: value}, allow_unicode=True, sort_keys=False, default_flow_style=flow, width=120)
         start = next((i for i, ln in enumerate(lines) if ln.startswith(f"{key}:")), None)
         if start is None:
             if lines and not lines[-1].endswith("\n"):
@@ -219,20 +252,58 @@ def load(path: Path | None = None) -> dict:
     return cfg
 
 
-def set_is_mock(is_mock: bool, path: Path | None = None) -> None:
-    """config.yaml의 kiwoom.is_mock만 바꾼다 (주석·나머지 설정은 그대로). 로그인 화면에서 키 종류를 고를 때."""
+def set_kiwoom(path: Path | None = None, **flags: bool) -> None:
+    """config.yaml의 kiwoom 아래 참/거짓 값(is_mock·real_orders)만 바꾼다 (주석·나머지 설정은 그대로).
+    로그인 화면에서 키 종류를 고를 때, 운영 탭에서 실전 주문에 동의할 때."""
     import re
     p = path or home() / "config.yaml"
     text = p.read_text(encoding="utf-8") if p.exists() else TEMPLATE
-    val = "true" if is_mock else "false"
-    new, n = re.subn(r"(?m)^(\s+is_mock:\s*)(true|false)\b", rf"\g<1>{val}", text, count=1)
-    if not n:
-        new = text.rstrip("\n") + f"\n\nkiwoom:\n  is_mock: {val}\n"
+    for name, on in flags.items():
+        val = "true" if on else "false"
+        text, n = re.subn(rf"(?m)^(\s+{name}:\s*)(true|false)\b", rf"\g<1>{val}", text, count=1)
+        if n:
+            continue
+        m = re.search(r"(?m)^kiwoom:[^\n]*\n", text)
+        if m:
+            text = text[:m.end()] + f"  {name}: {val}\n" + text[m.end():]
+        else:
+            text = text.rstrip("\n") + f"\n\nkiwoom:\n  {name}: {val}\n"
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(new, encoding="utf-8")
+    p.write_text(text, encoding="utf-8")
+
+
+def set_is_mock(is_mock: bool, path: Path | None = None) -> None:
+    set_kiwoom(path, is_mock=is_mock)
+
+
+def data_dir(cfg: dict) -> Path:
+    """시세·DB 폴더 — config data_dir (상대 경로는 KTRADE_HOME 기준), 비면 <KTRADE_HOME>/data."""
+    h = Path(cfg["_home"])
+    d = cfg.get("data_dir")
+    return (h / Path(str(d)).expanduser()) if d else h / "data"
+
+
+def set_data_dir(cfg: dict, new: str | Path, move: bool = True) -> tuple[Path, list[str]]:
+    """데이터 폴더를 바꾼다: (move면) 지금 폴더의 DB·시세를 옮긴 뒤 config.yaml data_dir에 적는다.
+    돌려주는 것 = (새 폴더, 옮긴 이름). 사용자 폴더 안 data로 돌아가면 data_dir을 비운다."""
+    h = Path(cfg["_home"])
+    dst = Path(str(new).strip().strip('"')).expanduser()
+    if not str(new).strip():
+        raise ValueError("폴더를 입력하세요")
+    dst = (h / dst if not dst.is_absolute() else dst).resolve()
+    if dst.exists() and not dst.is_dir():
+        raise ValueError(f"폴더가 아니라 파일입니다: {dst}")
+    moved: list[str] = []
+    if move:
+        from ktrade.data.store import move_data
+        moved = move_data(data_dir(cfg), dst)
+    else:
+        dst.mkdir(parents=True, exist_ok=True)
+    update_sections({"data_dir": None if dst == (h / "data").resolve() else str(dst)}, h / "config.yaml")
+    return dst, moved
 
 
 def paths(cfg: dict) -> dict[str, Path]:
-    h = Path(cfg["_home"])
-    return {"home": h, "db": h / "data" / "market.db", "plans": h / "plans", "strategies": h / "strategies",
+    h, d = Path(cfg["_home"]), data_dir(cfg)
+    return {"home": h, "data": d, "db": d / "market.db", "plans": h / "plans", "strategies": h / "strategies",
             "logs": h / "logs", "experiments": h / "experiments"}

@@ -11,7 +11,9 @@ import pandas as pd
 from kiwoom_client import KiwoomAPI, extract_records, normalize, to_dataframe
 
 
-def _paginate(fn, kwargs: dict, stop_before: str | None, max_pages: int, date_field: str = "dt") -> list[dict]:
+def _paginate(fn, kwargs: dict, stop_before: str | None, max_pages: int, date_field: str = "dt",
+              strict: bool = False) -> list[dict]:
+    """stop_before(YYYYMMDD)가 담긴 페이지에서 멈춘다. strict = 그보다 앞 날짜가 나와야 멈춤(분봉·틱: 그날을 다 받으려고)."""
     out, cont, nxt = [], "N", ""
     for _ in range(max_pages):
         resp = fn(cont_yn=cont, next_key=nxt, **kwargs)
@@ -19,7 +21,8 @@ def _paginate(fn, kwargs: dict, stop_before: str | None, max_pages: int, date_fi
         if not recs:
             break
         out.extend(recs)
-        if stop_before and any(str(r.get(date_field, ""))[:8] <= stop_before for r in recs):
+        if stop_before and any((d < stop_before) if strict else (d <= stop_before)
+                               for d in (str(r.get(date_field, ""))[:8] for r in recs)):
             break
         if resp.get("cont-yn", "N") != "Y" or not resp.get("next-key"):
             break
@@ -42,6 +45,22 @@ def _bars(records: list[dict], div: float = 1.0) -> pd.DataFrame:
         "close": _num(df["cur_prc"]) / div, "volume": _num(df["trde_qty"]).fillna(0).astype("int64"),
     }).dropna(subset=["close"])
     return out[out["close"] > 0].drop_duplicates("date").sort_values("date").reset_index(drop=True)
+
+
+def _timed(recs: list[dict], since: str | None, keep_dupes: bool = False) -> pd.DataFrame:
+    """분봉·틱 레코드 → ts(YYYY-MM-DD HH:MM:SS), open…volume. 틱은 같은 초에 여러 건이라 keep_dupes(받은 순서 유지)."""
+    df = to_dataframe(recs)
+    if df.empty or "cntr_tm" not in df:
+        return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
+    out = pd.DataFrame({
+        "ts": pd.to_datetime(df["cntr_tm"].astype(str), format="%Y%m%d%H%M%S", errors="coerce"),
+        "open": _num(df["open_pric"]), "high": _num(df["high_pric"]), "low": _num(df["low_pric"]),
+        "close": _num(df["cur_prc"]), "volume": _num(df["trde_qty"]).fillna(0).astype("int64"),
+    }).dropna(subset=["ts", "close"])  # 시각이 빈 레코드(거래정지 종목 등)는 버린다
+    out["ts"] = out["ts"].dt.strftime("%Y-%m-%d %H:%M:%S")
+    out = out.sort_values("ts", kind="stable") if keep_dupes else out.drop_duplicates("ts").sort_values("ts")
+    out = out.reset_index(drop=True)
+    return out[out["ts"] >= since].reset_index(drop=True) if since else out
 
 
 class KiwoomData:
@@ -71,27 +90,29 @@ class KiwoomData:
             df = to_dataframe(self.api.stock_info.stock_info_list(mrkt_tp=m))
             if df.empty:
                 continue
+            def col(k):
+                return df[k].astype(str) if k in df else pd.Series([""] * len(df), index=df.index)
             frames.append(pd.DataFrame({"code": df["code"].astype(str), "name": df["name"].astype(str), "market": m,
-                                        "market_name": df.get("marketName", pd.Series([""] * len(df))).astype(str),
-                                        "state": df.get("state", pd.Series([""] * len(df))).astype(str)}))
+                                        "market_name": col("marketName"), "state": col("state"),
+                                        "last_price": _num(col("lastPrice")), "list_count": _num(col("listCount")),
+                                        "order_warning": col("orderWarning"), "audit_info": col("auditInfo"),
+                                        "up_name": col("upName"), "up_size": col("upSizeName")}))
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(
-            columns=["code", "name", "market", "market_name", "state"])
+            columns=["code", "name", "market", "market_name", "state", "last_price", "list_count", "order_warning",
+                     "audit_info", "up_name", "up_size"])
 
-    def minute(self, symbol: str, since: str | None = None, max_pages: int = 3) -> pd.DataFrame:
-        """1분봉 (ka10080, 수정주가). since(YYYY-MM-DD)가 담긴 페이지에서 멈춘다. 반환 열: ts, open…volume."""
-        recs = _paginate(self.api.chart.stock_minute_chart, {"stk_cd": symbol, "tic_scope": "1", "upd_stkpc_tp": "1"},
-                         since.replace("-", "") if since else None, max_pages, date_field="cntr_tm")
-        df = to_dataframe(recs)
-        if df.empty or "cntr_tm" not in df:
-            return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
-        out = pd.DataFrame({
-            "ts": pd.to_datetime(df["cntr_tm"].astype(str), format="%Y%m%d%H%M%S", errors="coerce"),
-            "open": _num(df["open_pric"]), "high": _num(df["high_pric"]), "low": _num(df["low_pric"]),
-            "close": _num(df["cur_prc"]), "volume": _num(df["trde_qty"]).fillna(0).astype("int64"),
-        }).dropna(subset=["ts", "close"])  # 시각이 빈 레코드(거래정지 종목 등)는 버린다
-        out["ts"] = out["ts"].dt.strftime("%Y-%m-%d %H:%M:%S")
-        out = out.drop_duplicates("ts").sort_values("ts").reset_index(drop=True)
-        return out[out["ts"] >= since] if since else out
+    def minute(self, symbol: str, since: str | None = None, max_pages: int = 3, interval: int = 1) -> pd.DataFrame:
+        """N분봉 (ka10080, 수정주가, interval 1·3·5·10·15·30·45·60). since(YYYY-MM-DD) 하루 전까지 받는다. 반환 열: ts, open…volume."""
+        recs = _paginate(self.api.chart.stock_minute_chart, {"stk_cd": symbol, "tic_scope": str(interval), "upd_stkpc_tp": "1"},
+                         since.replace("-", "") if since else None, max_pages, date_field="cntr_tm", strict=True)
+        return _timed(recs, since)
+
+    def tick(self, symbol: str, since: str | None = None, max_pages: int = 50, ticks: int = 1) -> pd.DataFrame:
+        """N틱봉 (ka10079, ticks 1·3·5·10·30). 키움은 최근 며칠만 준다. 시간 순서(같은 초 안의 순서 유지). 열: ts, open…volume."""
+        recs = _paginate(self.api.chart.stock_tick_chart, {"stk_cd": symbol, "tic_scope": str(ticks), "upd_stkpc_tp": "1"},
+                         since.replace("-", "") if since else None, max_pages, date_field="cntr_tm", strict=True)
+        return _timed(recs[::-1], since, keep_dupes=True)
+
 
     def quote(self, symbol: str) -> dict:
         d = normalize(self.api.stock_info.basic_stock_info(stk_cd=symbol))

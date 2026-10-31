@@ -115,11 +115,7 @@ def validate(cfg: dict, strategy_id: str, asof: str | None = None, params: dict 
             return rep
         plans = compose(out, rules, ctx.data)
         syms = [p.symbol for p in plans]
-        closes = {}
-        if syms:
-            r = store.query(f"SELECT symbol, close FROM ohlcv WHERE date = ? AND symbol IN ({','.join('?' * len(syms))})",
-                            (day, *syms))
-            closes = dict(zip(r["symbol"], r["close"]))
+        closes = store.market.closes(day, syms) if syms else {}
         ok, rej = guard.screen([(info.id, plans)], closes, int(cfg["risk"]["max_plans_per_strategy"]))
         rep.notes.append(f"{day} 기준 select(): 후보 {len(out)}개, 엔진 검사 통과 {len(ok[info.id])}개, {el:.1f}초")
         for _, sym, why in rej[:5]:

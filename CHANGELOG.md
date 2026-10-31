@@ -1,5 +1,30 @@
 # 변경 기록
 
+## 0.7.0 (2026-10-31)
+
+- 새 PC 테스트 순서 문서 `docs/FIRST_RUN_TEST.md` (설치 → 데이터 받기 → 백테스트 로그인 → 자동매매 시작)
+- 오늘 손익 계산이 실제 날짜와 다른 날짜로 부르면 그날 매도분을 빠뜨리던 문제 수정 (테스트가 날짜에 따라 실패하던 원인)
+- 기능 구분: **체험 모드**는 백테스트만(가상 데이터), **기본 기능**(운영·조건식 자동매매·계획·매매 기록·성적·영웅문 조건식·차트)은
+  키움 앱키 로그인만으로, **백테스트**(대시보드 탭·`ktrade test`·`backtest`·`experiments`·`compare`)는 이용 코드로 추가 로그인해야 씀
+- 이용 코드(`ktrade/access.py`): 관리자 서명 키(Ed25519, 추가 패키지 없음)로 서명한 `KT1.…` 코드 — 아이디·역할(backtest·admin)·만료일.
+  `ktrade access login|logout|status`, 환경변수 `KTRADE_ACCESS_CODE`. 관리자: `ktrade admin init|issue|list`, 대시보드 🛠️ 관리자 탭
+- 실전 계좌 자동매매: 실전 키여도 **실전 주문 동의**(운영 탭 5단계·`ktrade real-orders on`, `kiwoom.real_orders`) 뒤에만 주문.
+  키를 새로 저장하면 동의가 풀림. 운영 탭 5단계에서 주문 방식(가상 체결 / 내 키움 계좌) 선택
+- **데이터 저장 위치 고르기**: `config.yaml` `data_dir`(비우면 `~/.ktrade/data`), `ktrade data-dir [폴더] [--no-move]`, 대시보드 📥 데이터 탭
+  '📁 저장 위치 바꾸기'(첫 시세 받기 화면에도). DB·시세·가상 체결 장부를 같이 옮김 — 받는 폴더에 같은 이름이 있거나 자동매매가 돌면 막음
+- **시세 저장소를 Parquet 폴더로** (`data/market.py`, `~/.ktrade/data/market/`): 종류별 폴더(daily·index·minute·tick·orderbook) +
+  기간별 파일(일봉=해, 분봉=달, 틱·호가=날). 일봉 1,170만 행 실측 843 MB → 161 MB. 지난 기간 파일은 바뀌지 않아 새 파일만 복사하면 백업.
+  일봉은 숫자 배열로 메모리에 한 번만 올려 둠(40년치 2,500종목 약 490 MB, 3년치 수십 MB). 종목 목록·매매 기록은 SQLite(`market.db`) 그대로.
+  **예전 `market.db`의 시세 표(ohlcv·index_ohlcv·minute_ohlcv)는 처음 열 때 Parquet으로 옮기고 행 수가 맞으면 지움**
+- 받을 범위 고르기: `collect.exclude_kinds`(ETF·ETN·스팩·리츠·우선주, 기본 ETF·ETN·스팩·우선주 제외), `exclude_warning`(투자유의),
+  `price`(전일 종가)·`market_cap`(시가총액 억 원) — 종목 목록(ka10099)에 전일 종가·상장주식수·투자유의·업종을 함께 저장(`DataView.universe()`에도 보임)
+- 받을 봉: `collect.daily`, N분봉 `minute.intervals`(1·3·5·10·15·30·45·60), N틱 `tick.units`(1·3·5·10·30, ka10079), 분봉·틱 종목에 `all`(범위 전체).
+  분봉·틱 이어받기는 마지막 날을 다시 받아 채움(그날 앞부분이 빠지던 문제 수정). `ktrade collect` 옵션 `--exclude-kinds --keep-all-kinds
+  --price-min/max --cap-min/max --no-daily --minute-intervals --tick-symbols --tick-units --tick-start`
+- 대시보드 **📥 데이터** 탭: 받아 둔 시세·종류별 용량, 받을 범위 설정(저장 = config.yaml collect), 범위에 드는 종목 미리보기(가격·시가총액), 지금 받기
+- 차트 탭: 일봉 / N분봉(1분봉만 있어도 묶어서) / N틱, 이동평균선·거래량 이동평균 고르기(`chart.ma`·`chart.volume_ma`, 기본으로 저장 버튼), 거래량 막대
+- `ktrade data`: 분 단위별 분봉, 틱 일수, 종류별 파일 수·용량
+
 ## 0.6.0 — 2026-10-27
 
 - 영웅문 조건검색식 1a: `ktrade hts list`(조건식 목록), `ktrade hts scan "<이름|번호>" [--csv] [--limit]`(지금 걸린 종목, 주문 없음) —
