@@ -173,3 +173,30 @@ def test_duplicated_conditions_from_old_save_bug(home):
     assert df["조건식"].tolist() == ["A"]
     assert ops.save_settings(cfg, ops.conditions_from_table(df, cfg["hts_conditions"], None), {}) == []
     assert [c["name"] for c in C.load()["hts_conditions"]] == ["A"]
+
+
+def test_start_run_process(tmp_path, cfg):
+    """자동매매 탭 '매매계획 실행' — ktrade run을 따로 띄우고, 실전은 실전 주문 동의 뒤에만(--live-confirm)."""
+    store = _filled_store(tmp_path)
+    calls = []
+
+    class P:
+        pid = 777
+
+    def fake_popen(args, **kw):
+        calls.append(args)
+        return P()
+    cfg["_secrets"] = {}
+    assert "키움 로그인" in ops.start_run(cfg, store, NOW, popen=fake_popen)["reason"]
+    cfg["_secrets"] = {"app_key": "k", "app_secret": "s"}
+    res = ops.start_run(cfg, store, NOW, popen=fake_popen)
+    assert res["ok"] and calls[-1][-1] == "run" and store.get_setting("process.run")["pid"] == 777
+    store.set_setting("live.heartbeat", {"ts": NOW.isoformat(timespec="seconds")})
+    assert ops.start_run(cfg, store, NOW, popen=fake_popen)["reason"] == "이미 실행 중"
+    ops.stop_run(store)
+    assert store.get_setting("process.stop.run")["at"]
+    store.set_setting("live.heartbeat", {})
+    cfg["broker"], cfg["kiwoom"] = "kiwoom", {**cfg["kiwoom"], "is_mock": False, "real_orders": False}
+    assert "실전 주문 동의" in ops.start_run(cfg, store, NOW, popen=fake_popen)["reason"]
+    cfg["kiwoom"]["real_orders"] = True
+    assert ops.start_run(cfg, store, NOW, popen=fake_popen)["ok"] and calls[-1][-2:] == ["run", "--live-confirm"]

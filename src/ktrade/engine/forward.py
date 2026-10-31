@@ -190,7 +190,7 @@ def render(rep: dict) -> str:
 
 
 def confirm_report(store: Store, cfg: dict, days: list[str], cond_name: str, iid: str, params: dict | None = None) -> dict:
-    """조건식 편입(묶음마다 첫 편입) → 파이썬 확인(장중 조건)을 그 시각까지의 받아 둔 1분봉으로 돌려 통과/불통과를 가르고,
+    """조건식 편입(묶음마다 첫 편입) → 직접 작성 조건(장중 조건)을 그 시각까지의 받아 둔 1분봉으로 돌려 통과/불통과를 가르고,
     각각 '그때 샀다면' 결과를 낸다. {all, passed, failed, table, missing_bars}."""
     from datetime import datetime as _dt
 

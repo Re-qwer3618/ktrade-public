@@ -79,21 +79,47 @@ def start_watch(cfg: dict, store: Store, now: datetime | None = None, popen=subp
         return {"ok": False, "reason": "조건식이 없습니다 — 1단계에서 고르고 저장하세요"}
     if not cfg["_secrets"].get("app_key"):
         return {"ok": False, "reason": "키움 로그인이 필요합니다 (조건검색은 키움 서버가 계산)"}
+    return _spawn(cfg, store, "hts", ["hts", "watch"], now, popen)
+
+
+def _spawn(cfg: dict, store: Store, key: str, args: list[str], now: datetime, popen) -> dict:
+    """`ktrade <args>`를 이 대시보드와 따로 사는 프로세스로 (대시보드를 닫아도 계속). 기록: process.<key>."""
     logs = paths(cfg)["logs"]
     logs.mkdir(parents=True, exist_ok=True)
-    log = logs / f"hts_watch_{now:%Y%m%d_%H%M%S}.log"
+    log = logs / f"{'_'.join(x for x in args[:2] if not x.startswith('-'))}_{now:%Y%m%d_%H%M%S}.log"
     env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1", "KTRADE_HOME": cfg["_home"]}
     flags = 0
     if sys.platform == "win32":
         flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
     with open(log, "w", encoding="utf-8") as fh:
-        proc = popen([sys.executable, "-m", "ktrade", "hts", "watch"], stdout=fh, stderr=subprocess.STDOUT,
+        proc = popen([sys.executable, "-m", "ktrade", *args], stdout=fh, stderr=subprocess.STDOUT,
                      stdin=subprocess.DEVNULL, env=env, creationflags=flags, cwd=cfg["_home"])
     info = {"pid": proc.pid, "started": now.isoformat(timespec="seconds"), "log": str(log)}
-    store.set_setting("process.hts", info)
-    store.log_decision("engine", "", "PROCESS", "START", f"hts watch 시작 (pid {proc.pid}, 로그 {log.name})",
+    store.set_setting(f"process.{key}", info)
+    store.log_decision("engine", "", "PROCESS", "START", f"ktrade {' '.join(args)} 시작 (pid {proc.pid}, 로그 {log.name})",
                        now.isoformat(timespec="seconds"))
     return {"ok": True, **info}
+
+
+def start_run(cfg: dict, store: Store, now: datetime | None = None, popen=subprocess.Popen) -> dict:
+    """매매계획 실행(`ktrade run`) — 켠 직접 작성 매매조건이 만든 오늘 계획을 장 마감까지 실행. 예약(⏰ 자동 실행)을 기다리지 않고 지금."""
+    from ktrade.cli import _hts_trade_allowed
+    now = now or datetime.now()
+    if status(store, cfg, now)["run_running"]:
+        return {"ok": False, "reason": "이미 실행 중"}
+    if not cfg["_secrets"].get("app_key"):
+        return {"ok": False, "reason": "키움 로그인이 필요합니다 (장중 시세는 키움에서 받음)"}
+    allow, how = _hts_trade_allowed(cfg)
+    if not allow:
+        return {"ok": False, "reason": how}
+    real = cfg.get("broker") == "kiwoom" and not cfg["kiwoom"].get("is_mock", True)
+    return _spawn(cfg, store, "run", ["run"] + (["--live-confirm"] if real else []), now, popen)
+
+
+def stop_run(store: Store) -> None:
+    from ktrade.engine.live import request_stop
+    request_stop(store, "run")
+    store.log_decision("engine", "", "PROCESS", "STOP", "ktrade run 중지 요청 (운영 화면)")
 
 
 def stop_watch(store: Store) -> None:
@@ -211,7 +237,26 @@ def recent_log(store: Store, day: str, n: int = 60) -> pd.DataFrame:
 
 
 # ---------------- 왼쪽 설정 ----------------
-COND_COLS = ["사용", "조건식", "모드", "매수 시작", "매수 끝", "하루 매수 한도", "확인(초)", "추격 한도%", "이탈 시 매도", "파이썬 확인"]
+COND_COLS = ["사용", "조건식", "모드", "검색 방식", "직접 작성 조건", "감시 종목", "매수 시작", "매수 끝", "하루 매수 한도", "확인(초)",
+             "추격 한도%", "이탈 시 매도"]
+# 편입되면 바로 / 편입 뒤 직접 작성 조건(장중)도 맞아야 / 키움 조건검색 없이 감시 종목을 직접 작성 조건으로 훑어 매매
+METHOD_HTS, METHOD_BOTH, METHOD_CUSTOM = "키움 조건검색만", "키움 + 직접 작성", "직접 작성만"
+METHODS = [METHOD_HTS, METHOD_BOTH, METHOD_CUSTOM]
+
+
+def parse_symbols(text) -> list[str]:
+    """'005930, 000660 035720' → 종목코드 목록 (6자리, 순서 유지·중복 제거). 이상한 값은 ValueError."""
+    import re
+    out = []
+    for tok in re.split(r"[\s,;/]+", str(text or "").strip()):
+        if not tok:
+            continue
+        code = tok.upper().removeprefix("A")
+        if not re.fullmatch(r"\d{6}", code):
+            raise ValueError(f"종목코드 '{tok}'가 6자리 숫자가 아닙니다")
+        if code not in out:
+            out.append(code)
+    return out
 
 
 def _cid(v) -> str:
@@ -229,7 +274,9 @@ def conditions_table(cfg: dict) -> pd.DataFrame:
         rows.append({"사용": True, "조건식": c["name"], "모드": "매매" if c.get("mode") == "trade" else "관찰",
                      "매수 시작": c["buy_window"][0], "매수 끝": c["buy_window"][1], "하루 매수 한도": int(c["max_buys_per_day"]),
                      "확인(초)": int(c.get("confirm_sec") or 0), "추격 한도%": float(c.get("chase_pct") or 0),
-                     "이탈 시 매도": bool(c.get("exit_on_remove")), "파이썬 확인": _cid(c.get("confirm"))})
+                     "이탈 시 매도": bool(c.get("exit_on_remove")),
+                     "검색 방식": METHOD_CUSTOM if c.get("source") == "custom" else (METHOD_BOTH if _cid(c.get("confirm")) else METHOD_HTS),
+                     "직접 작성 조건": _cid(c.get("confirm")), "감시 종목": ", ".join(c.get("symbols") or [])})
     return pd.DataFrame(rows, columns=COND_COLS)
 
 
@@ -246,11 +293,25 @@ def conditions_from_table(df: pd.DataFrame, old: list[dict], exits: dict | None)
                   "buy_window": [str(r.get("매수 시작") or "09:00"), str(r.get("매수 끝") or "15:20")],
                   "max_buys_per_day": int(r.get("하루 매수 한도") or 1), "confirm_sec": int(r.get("확인(초)") or 0),
                   "chase_pct": float(r.get("추격 한도%") or 0), "exit_on_remove": bool(r.get("이탈 시 매도"))})
-        cf = str(r.get("파이썬 확인") or "").strip()
-        if cf:
+        cf = str(r.get("직접 작성 조건") or "").strip()
+        method = r.get("검색 방식") or (METHOD_BOTH if cf else METHOD_HTS)
+        if method in (METHOD_BOTH, METHOD_CUSTOM) and not cf:
+            raise ValueError(f"'{name}': 검색 방식이 '{method}'이면 직접 작성 조건을 고르세요")
+        if method in (METHOD_BOTH, METHOD_CUSTOM):
             c["confirm"] = cf
         else:
             c.pop("confirm", None)
+        if method == METHOD_CUSTOM:
+            from ktrade.engine.signals import MAX_CUSTOM_SYMBOLS
+            syms = parse_symbols(r.get("감시 종목"))
+            if not syms:
+                raise ValueError(f"'{name}': 직접 작성만이면 감시 종목(종목코드)을 넣으세요 — 예: 005930, 000660")
+            if len(syms) > MAX_CUSTOM_SYMBOLS:
+                raise ValueError(f"'{name}': 감시 종목은 {MAX_CUSTOM_SYMBOLS}개까지 (지금 {len(syms)}개 — 종목마다 분봉을 조회합니다)")
+            c.update({"source": "custom", "symbols": syms})
+        else:
+            c.pop("source", None)
+            c.pop("symbols", None)
         if exits is not None:
             c["exits"] = exits
         out.append(c)

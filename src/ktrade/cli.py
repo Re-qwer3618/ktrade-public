@@ -110,8 +110,8 @@ params: {{}}          # 기본값은 strategy.py의 default_params. 여기나 co
 _INTRADAY_TEMPLATE = '''\
 """장중 조건 __ID__ — 장중에 '지금 사도 되나'를 판단한다. 고칠 곳은 아래 '── 1)'~'── 3)' 세 군데.
 
-쓰는 곳: ① 자동매매 탭 조건식의 '파이썬 확인' (조건검색 편입 종목을 사기 전에 한 번 더)
-        ② 🧪 백테스트 '계획에 쓸 매매조건'의 '장중 조건' (장 마감 후 고른 감시 목록을 장중에 지켜보다 매수)
+쓰는 곳: ① 자동매매 탭 조건식의 '직접 작성 조건' (조건검색 편입 종목을 사기 전에 한 번 더)
+        ② 🗓️ 매매계획 → ✍️ 직접 작성 조건검색 '계획에 쓸 매매조건'의 '장중 조건' (장 마감 후 고른 감시 목록을 장중에 지켜보다 매수)
 데이터(ctx) — 실전은 키움 실시간, 백테스트는 받아 둔 1분봉:
   ctx.price 지금 가격 · ctx.minutes 오늘 1분봉(지금까지) · ctx.daily 어제까지 일봉 · ctx.now 지금 시각
   ctx.vwap() · ctx.day_open · ctx.day_high · ctx.prev_close · ctx.event('insert'|'watch') · ctx.insert_price(편입가)
@@ -338,7 +338,7 @@ def cmd_strategies(a) -> None:
     for sid, info in loader.discover(cfg).items():
         item = on.get(sid, {})
         if info.kind == "intraday":
-            print(f"{'장중':2} {sid:22} {info.version:4} [장중 매수 판단 — 파이썬 확인·장중 조건으로 붙여 씀]\n"
+            print(f"{'장중':2} {sid:22} {info.version:4} [장중 매수 판단 — 직접 작성 조건·장중 조건으로 붙여 씀]\n"
                   f"     {info.description[:70]}  ({info.source})")
             continue
         try:
@@ -365,7 +365,7 @@ def cmd_new(a) -> None:
         sys.exit(str(exc))
     if kind == "intraday":
         print(f"만들었습니다(장중 조건): {d}\n  1) strategy.py 의 '── 1)~3)' 을 고치고\n  2) ktrade validate {a.id}\n"
-              "  3) 자동매매 탭 조건식의 '파이썬 확인' 또는 🧪 백테스트 '계획에 쓸 매매조건'의 '장중 조건'으로 붙이기")
+              "  3) 자동매매 탭 조건식의 '직접 작성 조건' 또는 🗓️ 매매계획 → ✍️ 직접 작성 조건검색 '계획에 쓸 매매조건'의 '장중 조건'으로 붙이기")
     else:
         print(f"만들었습니다: {d}\n  1) strategy.py 에서 '종목 선정'과 '매수 타이밍' 두 곳을 고치고\n"
               f"  2) ktrade test {a.id}\n  3) config.yaml strategies.enabled 에 '- id: {a.id}' 추가")
@@ -718,7 +718,7 @@ def _hts_watch(a, cfg: dict, server: str) -> None:
     from ktrade.data.stream import ConditionStream
     from ktrade.engine.executor import halt_state
     from ktrade.engine.live import stop_requested
-    from ktrade.engine.signals import SignalBook, load_conditions
+    from ktrade.engine.signals import SignalBook, is_custom, load_conditions
     conds = load_conditions(cfg, a.names or None)
     if not conds:
         sys.exit('관찰할 조건식을 주세요 — ktrade hts watch "01_오전스켈핑"  또는 config.yaml hts_conditions (목록: ktrade hts list)')
@@ -771,14 +771,17 @@ def _hts_watch(a, cfg: dict, server: str) -> None:
         return None
 
     until = a.until or cfg["live"].get("market_close", "15:30")
-    names = [c["name"] for c in conds]
+    names = [c["name"] for c in conds if not is_custom(c)]          # 키움 조건검색으로 등록할 조건식
+    custom = [c["name"] for c in conds if is_custom(c)]              # 직접 작성만 — 감시 종목을 직접 훑음
     trading = f"매매: {', '.join(trade_conds)} ({how})" if executor else (
         f"매매 설정 {', '.join(trade_conds)} — 관찰로 동작 ({how})" if trade_conds else "주문 없음")
-    print(f"조건식 실시간 ({server} 서버) — {', '.join(names)} · {until}까지 (Ctrl+C로 끝) · {trading}")
-    print("  같은 키로 실시간 시세·조건검색을 쓰는 다른 프로그램이 켜져 있으면 서로 끊깁니다(계정당 웹소켓 하나).")
-    stream = ConditionStream(cfg, names).start()
+    print(f"조건식 실시간 ({server} 서버) — {', '.join(names) or '키움 조건식 없음'}"
+          + (f" · 직접 작성만: {', '.join(custom)}" if custom else "") + f" · {until}까지 (Ctrl+C로 끝) · {trading}")
+    if names:
+        print("  같은 키로 실시간 시세·조건검색을 쓰는 다른 프로그램이 켜져 있으면 서로 끊깁니다(계정당 웹소켓 하나).")
+    stream = ConditionStream(cfg, names).start() if names else _NoStream()
     confirm = None
-    if any(c.get("confirm") for c in conds):          # 편입 뒤 파이썬 확인 — 키움 실시간 분봉·일봉으로
+    if any(c.get("confirm") for c in conds):          # 편입 뒤 직접 작성 조건 — 키움 실시간 분봉·일봉으로
         from ktrade.data.kiwoom import KiwoomData
         from ktrade.engine.intraday import KiwoomSource, Runner
         confirm = Runner(cfg, KiwoomSource(KiwoomData(cfg)))
@@ -821,9 +824,11 @@ def _hts_watch(a, cfg: dict, server: str) -> None:
                         show(d)
             for d in book.tick(now):
                 show(d)
+            for d in book.scan(now):           # 직접 작성만 — 감시 종목 (조건마다 poll_sec에 한 번)
+                show(d)
             if time.monotonic() - last_guard >= 5:
                 last_guard = time.monotonic()
-                store.set_setting("hts.heartbeat", {"ts": now.isoformat(timespec="seconds"), "conds": names,
+                store.set_setting("hts.heartbeat", {"ts": now.isoformat(timespec="seconds"), "conds": names, "custom": custom,
                                                     "registered": list(getattr(stream, "registered", [])), "restarts": getattr(stream, "restarts", 0),
                                                     "trade": executor is not None, "until": until})
                 if stop_requested(store, "hts", started):
@@ -859,6 +864,25 @@ def _hts_watch(a, cfg: dict, server: str) -> None:
         held = [s for s in store.active_plan_symbols() if (store.active_plan_trade(s) or {}).get("strategy", "").startswith("hts:")]
         if held:
             print(f"! 아직 보유 중 {len(held)}종목 ({', '.join(held)}) — 다음 ktrade hts watch / ktrade run 때 손절·익절·청산 규칙으로 계속 관리")
+
+
+class _NoStream:
+    """키움 조건식 없이 '직접 작성만' 조건만 돌 때 — 웹소켓을 열지 않는다(현재가는 REST 조회)."""
+    restarts = 0
+    registered: list = []
+
+    def __init__(self):
+        import queue
+        self.events = queue.Queue()
+
+    def price(self, sym: str):
+        return None
+
+    def watch_price(self, sym: str) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
 
 
 def _print_fills(store, before: dict, now) -> None:

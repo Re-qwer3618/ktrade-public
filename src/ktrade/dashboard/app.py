@@ -333,21 +333,34 @@ def tab_lab(cfg: dict, store: Store, examples_only: bool = False) -> None:
     if examples_only:
         lab_experiments(cfg, found, enabled, None)
         return
+    st.caption("직접 작성 조건검색(만들기·켜기·장중 조건 성적)은 🗓️ 매매계획 탭 → ✍️ 직접 작성 조건검색에 있습니다.")
+    lab_experiments(cfg, found, enabled, access.can_ai(acc))
+
+
+def plan_conditions(cfg: dict, store: Store) -> None:
+    """✍️ 직접 작성 조건검색 — 조건 폴더·양식, 계획에 쓸 매매조건 켜기, 장중 조건 성적, AI로 작성."""
+    from ktrade.engine import loader
+    allf = loader.discover(cfg)
     ai_on = access.can_ai(acc)
+    st.caption("내가 파이썬으로 쓴 조건검색입니다. **장 마감 후 매매조건**은 켜 두면 다음 날 매매계획을 만들고, **장중 조건**은 "
+               "🕹️ 자동매매 탭 조건식의 '검색 방식 = 키움 + 직접 작성'으로 키움 조건검색과 함께 쓰거나 매매조건에 붙여 씁니다. "
+               "켜기 전에 🧪 백테스트 탭에서 실험하세요.")
     cond_folder(cfg)
-    t1, t2, t4, t3 = st.tabs(["실험", "계획에 쓸 매매조건", "장중 조건", "🤖 AI 도우미" + ("" if ai_on else " 🔒")])
+    t1, t2, t3 = st.tabs(["계획에 쓸 매매조건", "장중 조건", "🤖 AI로 작성" + ("" if ai_on else " 🔒")])
     with t1:
-        lab_experiments(cfg, found, enabled, ai_on)
+        found = loader.of_kind(allf, "condition")
+        if found:
+            lab_enabled(cfg, found)
+        else:
+            st.info("매매조건이 없습니다 — 위 📁 내 조건 폴더에서 '장 마감 후 종목 선정' 양식으로 만드세요.")
     with t2:
-        lab_enabled(cfg, found)
-    with t4:
         lab_intraday(cfg, store, loader.of_kind(allf, "intraday"))
     with t3:
         if ai_on:
             lab_ai_writer(cfg)
         else:
             st.info("AI 도우미(백테스트 결과 분석 · 매매조건 작성)는 **AI판 구독** 기능입니다 — 구독 결제는 출시 때 열립니다. "
-                    "지금은 관리자만 씁니다.", icon=":material/lock:")
+                    "지금은 관리자만 씁니다. 그 전에는 📁 내 조건 폴더의 작성 규격을 AI 앱에 붙여 넣어 써도 됩니다.", icon=":material/lock:")
 
 
 def lab_experiments(cfg: dict, found: dict, enabled: list, ai_on: bool | None) -> None:
@@ -525,18 +538,18 @@ def cond_folder(cfg: dict) -> None:
 
 
 def lab_intraday(cfg: dict, store: Store, found: dict) -> None:
-    """장중 조건: 검사, ① 조건식 편입 + 파이썬 확인 성적(받아 둔 신호·1분봉), ② 쓰는 곳 안내."""
+    """장중 조건: 검사, ① 조건식 편입 + 직접 작성 조건 성적(받아 둔 신호·1분봉), ② 쓰는 곳 안내."""
     from ktrade.engine import forward
     from ktrade.engine.validate import validate
     if not found:
         st.info("장중 조건이 없습니다 — 위 📁 내 조건 폴더에서 '장중 매수 판단' 양식으로 만드세요 (예제: example_vwap_breakout).")
         return
     st.markdown("장중 조건은 **실전에서 키움 실시간 데이터**(현재가·오늘 1분봉)로, **백테스트에서는 받아 둔 1분봉**으로 같은 코드가 돕니다. "
-                "① 자동매매 탭 조건식의 **파이썬 확인** ② '계획에 쓸 매매조건'의 **장중 조건**에 붙여 씁니다.")
+                "① 자동매매 탭 조건식의 **직접 작성 조건** ② '계획에 쓸 매매조건'의 **장중 조건**에 붙여 씁니다.")
     iid = st.selectbox("장중 조건", sorted(found), key="li_id", format_func=lambda k: f"{k} {found[k].version} — {found[k].description}")
     if st.button("검사", key="li_val"):
         st.code(validate(cfg, iid).render(), language=None)
-    st.markdown("**① 조건식 편입 + 파이썬 확인 성적** — 받아 둔 편입 신호마다 그 시각까지의 1분봉으로 확인을 돌려, 통과한 것과 안 한 것을 따로 '그때 샀다면'")
+    st.markdown("**① 조건식 편입 + 직접 작성 조건 성적** — 받아 둔 편입 신호마다 그 시각까지의 1분봉으로 확인을 돌려, 통과한 것과 안 한 것을 따로 '그때 샀다면'")
     try:
         names = store.query("SELECT DISTINCT cond_name FROM condition_signals")["cond_name"].tolist()
         days = store.query("SELECT DISTINCT date FROM condition_signals ORDER BY date DESC")["date"].tolist()
@@ -553,7 +566,7 @@ def lab_intraday(cfg: dict, store: Store, found: dict) -> None:
             ss.li_rep = forward.confirm_report(store, cfg, sorted(days[:n]), cname, iid)
     rep = ss.get("li_rep")
     if rep:
-        st.dataframe(pd.DataFrame([_stat_row("모든 편입", rep["all"]), _stat_row(f"파이썬 확인 통과 ({iid})", rep["passed"]),
+        st.dataframe(pd.DataFrame([_stat_row("모든 편입", rep["all"]), _stat_row(f"직접 작성 조건 통과 ({iid})", rep["passed"]),
                                    _stat_row("불통과(안 샀을 것)", rep["failed"])]), hide_index=True, width="stretch")
         if rep["missing_bars"]:
             st.caption(f"1분봉이 없어 뺀 신호 {rep['missing_bars']}건 — 🔎 조건검색 · 차트 탭 성적표에서 '1분봉 받기'.")
@@ -572,7 +585,7 @@ def lab_ai_analysis(cfg: dict, info, r: dict) -> None:
                         horizontal=True, key=f"ai_an_prov_{info.id}")
         key = f"ai_an_{info.id}_{r['run_at']}_{prov}"
         if st.button("분석 요청", key=f"ai_an_go_{info.id}", disabled=not ai.has_key(prov),
-                     help=None if ai.has_key(prov) else "AI 도우미 탭에서 API 키를 먼저 넣으세요"):
+                     help=None if ai.has_key(prov) else "🗓️ 매매계획 → ✍️ 직접 작성 조건검색 → 🤖 AI로 작성에서 API 키를 먼저 넣으세요"):
             csv = paths(cfg)["experiments"] / info.id / f"{r['run_at']}_{r['setup']}.csv"
             trades = pd.read_csv(csv, encoding="utf-8-sig") if csv.exists() else None
             code_f = Path(str(info.source)) / "strategy.py"
@@ -622,7 +635,7 @@ def lab_ai_writer(cfg: dict) -> None:
             st.rerun()
         st.caption("요금은 각 회사 API 계정으로 나갑니다. 요청은 그 회사로만 직접 가고 ktrade 서버를 거치지 않습니다.")
     st.markdown("원하는 매매기법을 적으면 AI가 ktrade 규격(`LLM_CONTEXT.md`)대로 **strategy.yaml · strategy.py**를 씁니다. "
-                "받은 코드는 검사한 뒤 저장되고, **실험 탭에서 백테스트**한 다음 '계획에 쓸 매매조건'에서 켭니다.")
+                "받은 코드는 검사한 뒤 저장되고, **🧪 백테스트 탭에서 실험**한 다음 '계획에 쓸 매매조건'에서 켭니다.")
     mine = {k: v for k, v in loader.discover(cfg).items() if not is_example(v)}
     kind = st.radio("만들 조건", ["condition", "intraday"], horizontal=True, key="ai_w_kind",
                     format_func={"condition": "장 마감 후 종목 선정 (매매조건)", "intraday": "장중 매수 판단 (장중 조건)"}.get)
@@ -698,8 +711,8 @@ def lab_ai_writer(cfg: dict) -> None:
             return
         ss.pop("ai_draft", None)
         st.success(f"`{folder}`에 저장, 검사 통과 — " + (
-            "자동매매 탭 조건식의 '파이썬 확인' 또는 '계획에 쓸 매매조건'의 '장중 조건'으로 붙이고, 장중 조건 탭에서 성적을 보세요."
-            if d.get("kind") == "intraday" else "실험 탭에서 백테스트한 뒤 '계획에 쓸 매매조건'에서 켜세요."))
+            "자동매매 탭 조건식의 '직접 작성 조건' 또는 '계획에 쓸 매매조건'의 '장중 조건'으로 붙이고, 장중 조건 탭에서 성적을 보세요."
+            if d.get("kind") == "intraday" else "🧪 백테스트 탭에서 실험한 뒤 '계획에 쓸 매매조건'에서 켜세요."))
         st.code(rep.render(), language=None)
 
 
@@ -757,7 +770,7 @@ def schedule_settings(cfg: dict) -> None:
         st.caption("**장 마감 후 계획**(`ktrade daily`): 시세 받기 → 켠 매매조건으로 다음 거래일 계획. "
                    "**장중 실행**(`ktrade run`): 그 계획대로 매수하고 엔진 규칙(이익실현·손실제한)으로 매도, 장 마감까지 돎. "
                    "PC가 켜져 있고 로그인돼 있어야 돕니다. 아래 영웅문 조건식 엔진(5단계 시작)과는 따로 돌고, 둘이 겹치면 4단계 우선순위를 따릅니다. "
-                   "계획에 쓸 매매조건은 🧪 백테스트 탭에서 켭니다.")
+                   "계획에 쓸 매매조건은 🗓️ 매매계획 → ✍️ 직접 작성 조건검색에서 켭니다.")
         if reg is not None:
             st.caption("작업 스케줄러: " + " · ".join(f"`{n}` {'등록됨' if ok else '없음'}" for n, ok in reg.items()))
         if msg := ss.pop("schedule_msg", None):
@@ -801,7 +814,7 @@ def ai_pick_provider(cfg: dict, key: str) -> str | None:
     from ktrade import ai
     have = [p for p in ai.PROVIDERS if ai.has_key(p)]
     if not have:
-        st.info("AI API 키가 없습니다 — 🧪 백테스트 → 🤖 AI 도우미 → AI 연결 설정에서 넣으세요.", icon=":material/key:")
+        st.info("AI API 키가 없습니다 — 🗓️ 매매계획 → ✍️ 직접 작성 조건검색 → 🤖 AI로 작성 → AI 연결 설정에서 넣으세요.", icon=":material/key:")
         return None
     s = ai.settings(cfg)
     return st.radio("AI", have, index=have.index(s["provider"]) if s["provider"] in have else 0, format_func=ai.PROVIDERS.get,
@@ -814,7 +827,7 @@ def ai_stock_analysis(cfg: dict, store: Store, sym: str, name: str, key: str) ->
     with st.expander("🤖 AI 종목 분석" + (" — 개인 스킬" if ai.settings(cfg).get("skill_dir") else ""), expanded=False):
         skill, used = ai.skill_text(cfg)
         st.caption((f"개인 스킬 `{ai.settings(cfg)['skill_dir']}` ({len(used)}개 파일)로 분석합니다." if skill else
-                    "개인 스킬이 없어 기본 분석으로 합니다 — 🤖 AI 도우미 → AI 연결 설정에서 스킬 폴더를 정하세요.")
+                    "개인 스킬이 없어 기본 분석으로 합니다 — 🗓️ 매매계획 → ✍️ 직접 작성 조건검색 → 🤖 AI로 작성 → AI 연결 설정에서 스킬 폴더를 정하세요.")
                    + " 일봉 120개와 코스피 지수를 함께 보냅니다.")
         prov = ai_pick_provider(cfg, key)
         q = st.text_input("물어볼 것 (비우면 전체 분석)", key=f"{key}_q", placeholder="매물대는 어디야? 지금 매수 타이밍이야?")
@@ -883,12 +896,15 @@ def tab_plan(P: dict, store: Store, cfg: dict) -> None:
     if access.can_ai(acc):
         with st.expander("🤖 자연어 종목 찾기 · AI 분석", expanded=not docs):
             ai_search(cfg, store)
+    t1, t2, t3, t4 = st.tabs(["날짜별 계획", "최근 적중", "걸러진 계획", "✍️ 직접 작성 조건검색"])
+    with t4:
+        plan_conditions(cfg, store)
     if not docs:
-        st.info("계획이 없습니다. 🧪 백테스트 탭에서 켠 매매조건이 장 마감 후 다음 거래일 계획을 만듭니다 "
-                "(자동매매 탭 ⏰ 자동 실행, 또는 `ktrade daily`). 일봉 데이터가 있어야 합니다.")
+        with t1:
+            st.info("계획이 없습니다. ✍️ 직접 작성 조건검색 → '계획에 쓸 매매조건'에서 켠 매매조건이 장 마감 후 다음 거래일 계획을 만듭니다 "
+                    "(자동매매 탭 ⏰ 자동 실행, 또는 `ktrade daily`). 일봉 데이터가 있어야 합니다.")
     else:
         cost = float(cfg["backtest"]["cost_pct"])
-        t1, t2, t3 = st.tabs(["날짜별 계획", "최근 적중", "걸러진 계획"])
         with t1:
             asof = st.selectbox("기준일 (이날 장 마감 기준 → 다음 거래일에 실행)", list(docs), key="plan_asof")
             day = report.exec_day(store, asof)
@@ -1362,6 +1378,7 @@ def ops_status(cfg: dict) -> None:
             if s["hts_running"]:
                 hb = s["hts"]
                 st.badge(f"조건식 엔진 실행 중 · 등록 {len(hb.get('registered') or [])}/{len(hb.get('conds') or [])}"
+                         + (f" · 직접 작성만 {len(hb['custom'])}" if hb.get("custom") else "")
                          + (f" · 재연결 {hb['restarts']}번" if hb.get("restarts") else ""), icon=":material/sensors:", color="green")
             else:
                 st.badge("조건식 엔진 멈춤", icon=":material/sensors_off:", color="gray")
@@ -1406,7 +1423,7 @@ def ops_settings(cfg: dict) -> None:
     listed = ss.get("ops_listed") or []
     extra = [n for n in listed if n not in set(table["조건식"])]
     if extra:
-        add = pd.DataFrame([{**{c: None for c in ops.COND_COLS}, "사용": False, "조건식": n, "모드": "관찰", "매수 시작": "09:00",
+        add = pd.DataFrame([{**{c: None for c in ops.COND_COLS}, "사용": False, "조건식": n, "모드": "관찰", "검색 방식": ops.METHOD_HTS, "매수 시작": "09:00",
                              "매수 끝": "15:20", "하루 매수 한도": 3, "확인(초)": 0, "추격 한도%": 1.0, "이탈 시 매도": False}
                             for n in extra])
         table = pd.concat([table, add], ignore_index=True)
@@ -1424,7 +1441,12 @@ def ops_settings(cfg: dict) -> None:
     r0 = cfg["risk"]
     with st.form("ops_form", border=False):
         with st.container(border=True):
-            st.markdown("**1 · 조건식** — 쓸 것에 체크, 매매/관찰 선택 (동시 10개까지). **파이썬 확인**을 고르면 편입 뒤 내 장중 조건으로 한 번 더 확인하고 삼")
+            st.markdown("**1 · 조건식** — 쓸 것에 체크, 매매/관찰 선택 (동시 10개까지). **검색 방식**: "
+                        f"**{ops.METHOD_HTS}** = 편입되면 삼 · **{ops.METHOD_BOTH}** = 편입 뒤 고른 **직접 작성 조건**(장중)까지 맞아야 삼 · "
+                        f"**{ops.METHOD_CUSTOM}** = 키움 조건검색 없이 **감시 종목**(최대 20개)을 30초마다 직접 작성 조건으로 확인해 맞으면 삼 "
+                        "(이때 '조건식' 칸은 내가 붙이는 이름)")
+            if not intraday_ids(cfg):
+                st.caption("직접 작성 조건(장중)이 아직 없습니다 — 🗓️ 매매계획 → ✍️ 직접 작성 조건검색 → 📁 내 조건 폴더에서 만드세요.")
             edited = st.data_editor(
                 table, key="ops_conds", hide_index=True, alt="조건식 설정", num_rows="dynamic", width="stretch",
                 column_config={
@@ -1438,9 +1460,14 @@ def ops_settings(cfg: dict) -> None:
                                                            help="편입 뒤 N초 동안 이탈 없고 편입가 이상이면 매수 (0 = 즉시)"),
                     "추격 한도%": st.column_config.NumberColumn(min_value=0.0, step=0.5, width="small"),
                     "이탈 시 매도": st.column_config.CheckboxColumn(width="small"),
-                    "파이썬 확인": st.column_config.SelectboxColumn(
-                        options=[""] + intraday_ids(cfg), help="편입 종목을 사기 전에 이 장중 조건(파이썬)으로 한 번 더 확인 — "
-                        "키움 실시간 분봉·현재가 기준. 조건은 🧪 백테스트 → 📁 내 조건 폴더에서 만듦"),
+                    "검색 방식": st.column_config.SelectboxColumn(
+                        options=ops.METHODS, required=True,
+                        help="키움 조건검색만 / 키움 조건검색 + 직접 작성 조건 / 직접 작성 조건만(감시 종목)"),
+                    "직접 작성 조건": st.column_config.SelectboxColumn(
+                        options=[""] + intraday_ids(cfg), help="'키움 + 직접 작성'·'직접 작성만'일 때 사기 전에 확인할 장중 조건(파이썬) — "
+                        "키움 실시간 분봉·현재가 기준. 조건은 🗓️ 매매계획 → ✍️ 직접 작성 조건검색에서 만듦"),
+                    "감시 종목": st.column_config.TextColumn(
+                        help="'직접 작성만'일 때 지켜볼 종목코드, 쉼표로 (예: 005930, 000660) — 최대 20개"),
                 })
         with st.container(border=True):
             st.markdown("**2 · 이익실현 · 손실제한 · 트레일링스탑** — 모든 조건식 공통, 평균 매입가 기준 (0 = 끔)")
@@ -1536,6 +1563,7 @@ def ops_settings(cfg: dict) -> None:
         trade = [c["name"] for c in cfg.get("hts_conditions") or [] if c.get("mode") == "trade"]
         st.caption(f"매매 조건식 {len(trade)}개 · " + (f"주문: {how}" if allow else f"주문 안 함 — {how} (관찰로 동작)")
                    + " · 같은 키움 키로 실시간 시세를 쓰는 다른 프로그램이 켜져 있으면 서로 끊깁니다.")
+        st.markdown("**조건식 엔진** — 위 1단계 조건식(키움 조건검색 · 키움 + 직접 작성 · 직접 작성만)")
         a, b = st.columns(2)
         if a.button("시작", icon=":material/play_arrow:", type="primary", width="stretch", disabled=running, key="ops_start"):
             res = ops.start_watch(cfg, store)
@@ -1546,6 +1574,23 @@ def ops_settings(cfg: dict) -> None:
         if b.button("중지", icon=":material/stop:", width="stretch", disabled=not running or s["stop_pending"], key="ops_stop"):
             ops.stop_watch(store)
             st.toast("중지 요청 — 5초 안에 끝납니다. 잔고 종목은 다음 실행 때 계속 관리됩니다.", icon=":material/stop:")
+        enabled = [e.get("id") if isinstance(e, dict) else str(e) for e in cfg["strategies"]["enabled"]]
+        st.markdown("**매매계획 실행** — 🗓️ 매매계획에서 켠 직접 작성 매매조건의 오늘 계획대로 매수·매도 (장 마감까지). "
+                    "⏰ 자동 실행 예약을 기다리지 않고 지금 켜고 끕니다.")
+        st.caption(f"켠 매매조건 {len(enabled)}개" + (f" ({', '.join(enabled)})" if enabled else " — 🗓️ 매매계획 → ✍️ 직접 작성 조건검색에서 켬")
+                   + " · 장 시간이 아니면 켜 둔 채 장이 열리기를 기다립니다.")
+        run_on = s["run_running"]
+        a, b = st.columns(2)
+        if a.button("매매계획 실행 시작", icon=":material/play_arrow:", type="primary", width="stretch", disabled=run_on,
+                    key="ops_run_start"):
+            res = ops.start_run(cfg, store)
+            if res["ok"]:
+                st.toast(f"매매계획 실행을 시작했습니다 (pid {res['pid']})", icon=":material/play_arrow:")
+            else:
+                st.error(res["reason"])
+        if b.button("매매계획 실행 중지", icon=":material/stop:", width="stretch", disabled=not run_on, key="ops_run_stop"):
+            ops.stop_run(store)
+            st.toast(f"중지 요청 — {cfg['live'].get('interval_sec', 60)}초 안에 끝납니다.", icon=":material/stop:")
 
 
 def broker_ui(cfg: dict, running: bool) -> None:
@@ -1632,7 +1677,7 @@ def tab_help() -> None:
 2. **매매조건 만들기** — `ktrade new 내조건` → `~/.ktrade/strategies/내조건/strategy.py` 작성.
    직접 쓰기 어렵다면 `~/.ktrade/docs/LLM_CONTEXT.md`를 Claude·Gemini에 붙여 넣고 원하는 매매기법을 설명하면 코드를 써 줍니다.
 3. **실험** — 🧪 백테스트 탭 → 실험 (또는 `ktrade test 내조건`). 장중 조건을 붙여 1분봉으로도 실험. 바꿀 때마다 기록이 쌓여 비교됩니다.
-4. **켜기** — 🧪 백테스트 탭 '계획에 쓸 매매조건'에서 켬(장중 조건도 붙일 수 있음) → 장 마감 후 다음 날 매매계획이 생기고 자동매매가 그대로 실행합니다 (**매매계획** 탭).
+4. **켜기** — 🗓️ 매매계획 → ✍️ 직접 작성 조건검색 → '계획에 쓸 매매조건'에서 켬(장중 조건도 붙일 수 있음) → 장 마감 후 다음 날 매매계획이 생기고 자동매매가 그대로 실행합니다 (**매매계획** 탭).
 5. **모의 운영** — `ktrade run`: 기본은 가상매매(실제 주문 없음). 키움 모의투자는 `broker: kiwoom`, `is_mock: true`.
 6. **자동 실행** — 🕹️ 자동매매 탭 맨 위 ⏰ 자동 실행에서 시각·요일을 정해 등록 (또는 `ktrade schedule install`, 기본 평일 16:30 계획 · 08:50 실행).
 

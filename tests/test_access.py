@@ -123,6 +123,7 @@ def test_dashboard_without_chart_data(home, monkeypatch):
     assert not at.exception, at.exception
     tabs = [t.label for t in at.tabs]
     assert tabs[0] == "🕹️ 자동매매" and "🗓️ 매매계획" in tabs
+    assert "✍️ 직접 작성 조건검색" in tabs and "계획에 쓸 매매조건" in tabs     # 직접 작성 조건은 매매계획 탭으로 옮김
     assert any(m.label == "최근 일봉" and m.value == "받지 않음 (선택)" for m in at.metric)
 
 

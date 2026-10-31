@@ -65,6 +65,14 @@ def load_conditions(cfg: dict, names: list[str] | None = None) -> list[dict]:
     return list(conf.values())
 
 
+MAX_CUSTOM_SYMBOLS = 20         # 직접 작성만: 조건마다 감시 종목 상한 (종목마다 분봉 조회 — 키움 조회 한도)
+
+
+def is_custom(c: dict) -> bool:
+    """검색 방식 '직접 작성만' — 키움 조건검색 대신 정해 둔 감시 종목을 직접 작성 조건으로 훑는다."""
+    return c.get("source") == "custom"
+
+
 @dataclass
 class _Pending:
     cond: dict
@@ -74,6 +82,7 @@ class _Pending:
     insert_at: datetime
     event_time: str
     removed: bool = False
+    prechecked: tuple | None = None     # 직접 작성만: scan에서 이미 돌린 (이유, 추격 상한)
 
 
 class SignalBook:
@@ -83,10 +92,13 @@ class SignalBook:
                  price_wait_sec: float = 5.0, executor=None, allow_trade: bool = False, no_trade_reason: str = "",
                  confirm=None):
         self.store, self.price_fn, self.price_wait = store, price_fn, timedelta(seconds=price_wait_sec)
-        self.confirm = confirm              # engine.intraday.Runner — 조건식의 '파이썬 확인'(confirm: 장중 조건 id)
+        self.confirm = confirm              # engine.intraday.Runner — 조건식의 '직접 작성 조건'(confirm: 장중 조건 id)
         self.conds = {c["name"]: c for c in conds}
         self.pending: dict[tuple[str, str], _Pending] = {}
         self.executor, self.allow_trade, self.no_trade_reason = executor, allow_trade, no_trade_reason
+        self.custom = [c for c in conds if is_custom(c)]   # 검색 방식 '직접 작성만' — 키움 조건검색 없이 감시 종목을 직접 훑음
+        self.last_scan: dict[str, datetime] = {}
+        self.scan_state: dict[tuple[str, str], tuple[str, bool, str]] = {}   # (조건, 종목) → (시각, 통과, 이유) — 불통과는 기록하지 않음
         for c in conds:
             if c.get("mode") == "trade":
                 cond_exits(c)                  # 설정 오류는 시작할 때 바로
@@ -118,6 +130,47 @@ class SignalBook:
     def _bought_today(self, cond_name: str, today: str) -> set[str]:
         df = self.store.signals(today, cond_name)
         return set(df[df["action"].isin(BUY_ACTIONS)]["symbol"]) if not df.empty else set()
+
+    # ---- 직접 작성만: 감시 종목을 장중 조건으로 훑기 ----
+    def scan(self, now: datetime) -> list[dict]:
+        """'직접 작성만' 조건마다 poll_sec(기본 30초)에 한 번, 감시 종목을 직접 작성 조건(키움 실시간 분봉·현재가)으로 확인.
+        통과하면 편입과 똑같이 가격 범위·하루 한도·추격 상한을 거쳐 매수(또는 관찰 신호). 불통과는 신호 일지에 남기지 않는다."""
+        out = []
+        for c in self.custom:
+            name = c["name"]
+            last = self.last_scan.get(name)
+            if last is not None and (now - last).total_seconds() < float(c.get("poll_sec") or 30):
+                continue
+            self.last_scan[name] = now
+            lo, hi = c["buy_window"]
+            if not (lo <= now.strftime("%H:%M") <= hi):
+                continue
+            cf = c.get("confirm")
+            cf = cf if isinstance(cf, dict) else {"id": str(cf or "")}
+            if self.confirm is None or not cf["id"]:
+                continue
+            bought = self._bought_today(name, now.strftime("%Y-%m-%d"))
+            for sym in c.get("symbols") or []:
+                if len(bought) >= int(c["max_buys_per_day"]):
+                    break
+                if sym in bought and not c.get("reentry"):
+                    continue
+                price = self.price_fn(sym)
+                if not price:
+                    continue
+                try:
+                    ok, why, cap = self.confirm.check(cf["id"], cf.get("params"), sym, now, price, event="watch")
+                except Exception as exc:          # 한 종목 오류로 엔진이 서지 않게
+                    ok, why, cap = False, f"오류: {exc}", None
+                self.scan_state[(name, sym)] = (now.isoformat(timespec="seconds"), ok, why)
+                if not ok:
+                    continue
+                p = _Pending(c, sym, "custom", price, now, now.strftime("%H%M%S"), prechecked=(why, cap))
+                d = self._decide(p, price, now)
+                out.append(d)
+                if d["action"] in BUY_ACTIONS:
+                    bought.add(sym)
+        return out
 
     # ---- 이벤트 ----
     def handle(self, ev, now: datetime) -> list[dict]:
@@ -216,19 +269,25 @@ class SignalBook:
                                 f"+{(price / p.insert_price - 1) * 100:.1f}% (> {c['chase_pct']}%)", price, p.event_time, now)
         how = "즉시" if not float(c.get("confirm_sec") or 0) else f"{float(c['confirm_sec']):.0f}초 확인 후"
         cf = c.get("confirm")
-        if cf:                              # 편입 뒤 내 파이썬 조건으로 한 번 더 (키움 실시간 분봉·일봉)
+        if p.prechecked is not None:        # 직접 작성만 — scan에서 이미 통과
+            why, cap = p.prechecked
+            cf = cf if isinstance(cf, dict) else {"id": str(cf)}
+            if cap:
+                limit = min(limit, cap)
+            how = f"감시 종목, 직접 작성 조건 '{cf['id']}' 통과({why})"
+        elif cf:                            # 편입 뒤 내 파이썬 조건으로 한 번 더 (키움 실시간 분봉·일봉)
             cf = cf if isinstance(cf, dict) else {"id": str(cf)}
             if self.confirm is None:
-                return self._record(name, p.seq, p.symbol, "I", "SKIP", f"파이썬 확인 '{cf['id']}' 실행기 없음", price,
+                return self._record(name, p.seq, p.symbol, "I", "SKIP", f"직접 작성 조건 '{cf['id']}' 실행기 없음", price,
                                     p.event_time, now)
             ok, why, cap = self.confirm.check(cf["id"], cf.get("params"), p.symbol, now, price, event="insert",
                                               insert_price=p.insert_price)
             if not ok:
-                return self._record(name, p.seq, p.symbol, "I", "SKIP", f"파이썬 확인 '{cf['id']}' 불통과 — {why}", price,
+                return self._record(name, p.seq, p.symbol, "I", "SKIP", f"직접 작성 조건 '{cf['id']}' 불통과 — {why}", price,
                                     p.event_time, now)
             if cap:
                 limit = min(limit, cap)
-            how += f", 파이썬 확인 '{cf['id']}' 통과({why})"
+            how += f", 직접 작성 조건 '{cf['id']}' 통과({why})"
         if self.trading(c):
             return self._buy(p, price, limit, how, now)
         why = "관찰 모드라 주문 없음" if c["mode"] != "trade" else f"매매 설정이지만 관찰로 동작 — {self.no_trade_reason or '주문 허용 안 됨'}"
@@ -242,7 +301,8 @@ class SignalBook:
         plan = {"plan_id": pid, "symbol": p.symbol, "name": "", "rank": 1, "stop": None, "target": None,
                 "entry": {"min_open": 0.01, "min_price": round(price * 0.995, 2), "max_price": round(limit, 2), "after": now.strftime("%H:%M")},
                 "exits": ex, "max_hold_days": int(ex["max_hold_days"]),
-                "basis": f"영웅문 조건식 '{name}' 편입 {p.event_time} ({how})", "meta": {"insert_price": p.insert_price}}
+                "basis": (f"직접 작성 조건 '{name}' 신호 {p.event_time} ({how})" if is_custom(c)
+                          else f"영웅문 조건식 '{name}' 편입 {p.event_time} ({how})"), "meta": {"insert_price": p.insert_price}}
         self.executor.add_plan(f"hts:{name}", "hts", plan)
         self.executor.check(p.symbol, now)
         t = self.store.active_plan_trade(p.symbol)

@@ -1,4 +1,4 @@
-"""장중 조건(Intraday): ① 조건검색 편입 뒤 파이썬 확인 ② 감시 목록 장중 신호 매수, 키움 데이터 정합 확인, 백테스트."""
+"""장중 조건(Intraday): ① 조건검색 편입 뒤 직접 작성 조건 ② 감시 목록 장중 신호 매수, 키움 데이터 정합 확인, 백테스트."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -42,7 +42,7 @@ def _bars(day: str, start: str, closes: list[float], vols: list[float] | None = 
 
 
 def test_hts_insert_python_confirm(tmp_path):
-    """① 편입 → 파이썬 확인 불통과면 SKIP(이유 남김), 통과면 매수."""
+    """① 편입 → 직접 작성 조건 불통과면 SKIP(이유 남김), 통과면 매수."""
     store = Store(tmp_path / "m.db")
     broker = PaperBroker(tmp_path / "p.json", 10_000_000)
     px = {"A": 10000.0, "B": 5000.0}
@@ -51,9 +51,9 @@ def test_hts_insert_python_confirm(tmp_path):
     runner = FakeRunner(lambda sym, price: (sym == "B", "VWAP 위" if sym == "B" else "VWAP 아래", None))
     book = SignalBook(store, conds, px.get, executor=ex, allow_trade=True, confirm=runner)
     a = book.handle(Ev("insert", "A"), T0)[0]
-    assert a["action"] == "SKIP" and "파이썬 확인 'my_check' 불통과 — VWAP 아래" in a["reason"]
+    assert a["action"] == "SKIP" and "직접 작성 조건 'my_check' 불통과 — VWAP 아래" in a["reason"]
     b = book.handle(Ev("insert", "B", seq="2"), T0 + timedelta(seconds=5))[0]
-    assert b["action"] == "BUY" and "파이썬 확인 'my_check' 통과" in b["reason"] and broker.position("B") > 0
+    assert b["action"] == "BUY" and "직접 작성 조건 'my_check' 통과" in b["reason"] and broker.position("B") > 0
     assert runner.calls == [("my_check", "A", "insert"), ("my_check", "B", "insert")]
 
 
@@ -187,7 +187,7 @@ def test_backtest_with_intraday_uses_minutes(market, cfg):
 
 
 def test_confirm_report_splits_passed_and_failed(tmp_path, monkeypatch):
-    """① 백테스트: 받아 둔 신호 일지 + 1분봉으로 파이썬 확인 통과/불통과별 '그때 샀다면'."""
+    """① 백테스트: 받아 둔 신호 일지 + 1분봉으로 직접 작성 조건 통과/불통과별 '그때 샀다면'."""
     store = Store(tmp_path / "m.db")
     for sym, path in (("A", [100, 100, 100, 100, 103, 106, 106]), ("B", [100, 99, 98, 97, 96, 95, 94])):
         store.upsert_minute(sym, _bars("2026-10-26", "09:00:00", path))
@@ -206,8 +206,55 @@ def test_ops_table_python_confirm_roundtrip():
     from ktrade.dashboard import ops
     cfg = {"hts_conditions": [{"name": "단타", "mode": "trade", "confirm": "my_check"}, {"name": "관찰"}]}
     t = ops.conditions_table(cfg)
-    assert t["파이썬 확인"].tolist() == ["my_check", ""]
-    t.loc[1, "파이썬 확인"] = "vwap"
-    t.loc[0, "파이썬 확인"] = ""
+    assert t["직접 작성 조건"].tolist() == ["my_check", ""]
+    assert t["검색 방식"].tolist() == [ops.METHOD_BOTH, ops.METHOD_HTS]
+    t.loc[1, ["검색 방식", "직접 작성 조건"]] = [ops.METHOD_BOTH, "vwap"]
+    t.loc[0, "검색 방식"] = ops.METHOD_HTS                       # 키움만으로 바꾸면 고른 조건이 있어도 안 씀
     out = {c["name"]: c for c in ops.conditions_from_table(t, cfg["hts_conditions"], None)}
     assert "confirm" not in out["단타"] and out["관찰"]["confirm"] == "vwap"
+    t.loc[1, "직접 작성 조건"] = ""                                # 함께 쓰기인데 조건을 안 고르면 저장 거부
+    with pytest.raises(ValueError, match="직접 작성 조건을 고르세요"):
+        ops.conditions_from_table(t, cfg["hts_conditions"], None)
+
+
+def test_custom_only_scan_buys_watchlist(tmp_path):
+    """검색 방식 '직접 작성만': 키움 조건검색 없이 감시 종목을 poll_sec마다 직접 작성 조건으로 훑고, 통과하면 매수.
+    불통과는 신호 일지에 남기지 않고, 산 종목은 다시 사지 않는다."""
+    store = Store(tmp_path / "m.db")
+    broker = PaperBroker(tmp_path / "p.json", 10_000_000)
+    px = {"A": 10000.0, "B": 5000.0}
+    ex = Executor(store, broker, Risk(10_000_000, max_position_pct=10), lambda s: {"price": px[s], "open": px[s]}, role="hts")
+    conds = load_conditions({"hts_conditions": [{"name": "내감시", "mode": "trade", "source": "custom", "confirm": "my_check",
+                                                 "symbols": ["A", "B"], "poll_sec": 30}]})
+    passing = {"B"}
+    runner = FakeRunner(lambda sym, price: (sym in passing, "VWAP 위" if sym in passing else "VWAP 아래", None))
+    book = SignalBook(store, conds, px.get, executor=ex, allow_trade=True, confirm=runner)
+    out = book.scan(T0)
+    assert [d["action"] for d in out] == ["BUY"] and out[0]["symbol"] == "B" and broker.position("B") > 0
+    assert "감시 종목, 직접 작성 조건 'my_check' 통과" in out[0]["reason"]
+    assert runner.calls == [("my_check", "A", "watch"), ("my_check", "B", "watch")]
+    assert set(store.signals(T0.strftime("%Y-%m-%d"), "내감시")["symbol"]) == {"B"}     # A 불통과는 기록 안 함
+    assert book.scan(T0 + timedelta(seconds=10)) == []                                  # poll_sec 전에는 다시 안 봄
+    passing.add("A")
+    out = book.scan(T0 + timedelta(seconds=31))
+    assert [d["symbol"] for d in out] == ["A"]                                           # B는 이미 삼 → 건너뜀
+    t = store.active_plan_trade("A")
+    assert t is not None and t["strategy"] == "hts:내감시"
+
+
+def test_ops_table_custom_only_roundtrip():
+    from ktrade.dashboard import ops
+    t = ops.conditions_table({"hts_conditions": [{"name": "내감시", "source": "custom", "confirm": "vwap", "symbols": ["005930"]}]})
+    assert t.loc[0, "검색 방식"] == ops.METHOD_CUSTOM and t.loc[0, "감시 종목"] == "005930"
+    t.loc[0, "감시 종목"] = "005930, A000660"
+    c = ops.conditions_from_table(t, [], None)[0]
+    assert c["source"] == "custom" and c["symbols"] == ["005930", "000660"] and c["confirm"] == "vwap"
+    t.loc[0, "검색 방식"] = ops.METHOD_HTS                                            # 키움으로 돌리면 감시 설정은 지움
+    c = ops.conditions_from_table(t, [c], None)[0]
+    assert "source" not in c and "symbols" not in c and "confirm" not in c
+    t.loc[0, ["검색 방식", "감시 종목"]] = [ops.METHOD_CUSTOM, ""]
+    with pytest.raises(ValueError, match="감시 종목"):
+        ops.conditions_from_table(t, [], None)
+    t.loc[0, "감시 종목"] = "삼성전자"
+    with pytest.raises(ValueError, match="6자리"):
+        ops.conditions_from_table(t, [], None)
